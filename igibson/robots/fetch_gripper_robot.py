@@ -8,6 +8,7 @@ from igibson.external.pybullet_tools.utils import (
     get_child_frame_pose,
     get_constraint_violation,
     get_joint_info,
+    get_com_pose,
     get_relative_pose,
     joints_from_names,
     set_coll_filter,
@@ -485,6 +486,7 @@ class FetchGripper(LocomotorRobot):
         Calculates which object to assisted-grasp. Returns an (object_id, link_id) tuple or None
         if no valid AG-enabled object can be found.
         """
+        # print('calculating ag object')
         # Step 1 - find all objects in contact with both gripper forks
         gripper_fork_1_contacts = p.getContactPoints(
             bodyA=self.get_body_id(), linkIndexA=self.gripper_finger_joint_ids[0]
@@ -508,15 +510,16 @@ class FetchGripper(LocomotorRobot):
                 contact_dict[contact[2]] = []
             contact_dict[contact[2]].append({"contact_position": contact[5], "target_link": contact[4]})
 
+        # print((set_1_contacts), (set_2_contacts))
         candidates = list(set_1_contacts.intersection(set_2_contacts))
-
+        # print(f'found {len(candidates)} candidates')
         if len(candidates) == 0:
             return None
 
         # Step 2, check if contact with target is inside bounding box
         # Might be easier to check if contact normal points towards or away from center of gripper from
         # getContact Points
-
+        # print(f'ag strict mode? {self.ag_strict_mode}')
         if self.ag_strict_mode:
             # Compute gripper bounding box
             corners = []
@@ -585,12 +588,15 @@ class FetchGripper(LocomotorRobot):
                 self.candidate_data.append((candidate, contact_point_data["target_link"], dist))
 
         self.candidate_data = sorted(self.candidate_data, key=lambda x: x[2])
+        # print(f'number of candidates: {len(self.candidate_data)}')
         if len(self.candidate_data) > 0:
             ag_bid, ag_link, _ = self.candidate_data[0]
         else:
             return None
 
         # Return None if any of the following edge cases are activated
+        # print(f'can assisted grasp? {self.simulator.can_assisted_grasp(ag_bid, ag_link)}')
+        # print(f'bid == ag_bid? {self.get_body_id() == ag_bid}')
         if not self.simulator.can_assisted_grasp(ag_bid, ag_link) or (self.get_body_id() == ag_bid):
             return None
 
@@ -626,7 +632,7 @@ class FetchGripper(LocomotorRobot):
     def establish_grasp(self, ag_data):
         ag_bid, ag_link = ag_data
 
-        child_frame_pos, child_frame_orn = get_child_frame_pose(
+        self.child_frame_transform = get_child_frame_pose(
             parent_bid=self.get_body_id(), parent_link=self.eef_link_id, child_bid=ag_bid, child_link=ag_link
         )
 
@@ -644,8 +650,8 @@ class FetchGripper(LocomotorRobot):
             jointType=joint_type,
             jointAxis=(0, 0, 0),
             parentFramePosition=(0, 0, 0),
-            childFramePosition=child_frame_pos,
-            childFrameOrientation=child_frame_orn,
+            childFramePosition=self.child_frame_transform[0],
+            childFrameOrientation=self.child_frame_transform[1],
         )
         # Modify max force based on user-determined assist parameters
         if ag_link == -1:
@@ -668,7 +674,7 @@ class FetchGripper(LocomotorRobot):
             j_val = p.getJointState(self.get_body_id(), joint_index)[0]
             self.freeze_vals[joint_index] = j_val
 
-    def handle_assisted_grasping(self, action):
+    def handle_assisted_grasping(self, action, override_ag_data=None):
         """
         Handles assisted grasping.
         :param action: numpy array of actions.
@@ -679,16 +685,23 @@ class FetchGripper(LocomotorRobot):
 
         # Execute gradual release of object
         if self.object_in_hand is not None and self.release_counter is not None:
+            print('handle_release_window')
             self.handle_release_window()
 
         elif self.object_in_hand and self.release_counter is None:
             constraint_violated = get_constraint_violation(self.obj_cid) > CONSTRAINT_VIOLATION_THRESHOLD
             if constraint_violated or releasing_grasp:
+                print('release_grasp')
                 self.release_grasp()
 
         elif not self.object_in_hand and applying_grasp:
-            ag_data = self.calculate_ag_object()
+            # print('attempting to assisted grasp')
+            if override_ag_data is None:
+                ag_data = self.calculate_ag_object()
+            else:
+                ag_data = override_ag_data
             if ag_data:
+                print('establish_grasp')
                 self.establish_grasp(ag_data)
 
     def is_grasping(self, candidate_obj):
@@ -774,3 +787,54 @@ class FetchGripper(LocomotorRobot):
             if np.linalg.norm(np.array(link_pos) - np.array(toggle_position)) < toggle_distance_threshold:
                 return True
         return False
+
+    @property
+    def body_id(self):
+        return self.get_body_id()
+
+    @property
+    def name(self):
+        return "agent"
+
+    def calculate_eef_ik(self, pos, orn):
+        # Does not validate the correctness of the IK
+        joint_pos = np.array(
+            p.calculateInverseKinematics(
+                bodyIndex=self.robot_ids[0],
+                endEffectorLinkIndex=self.eef_link_id,
+                targetPosition=pos,
+                targetOrientation=orn,
+                lowerLimits=self.lower_joint_limits.tolist(),
+                upperLimits=self.upper_joint_limits.tolist(),
+                jointRanges=self.joint_range.tolist(),
+                restPoses=self.untucked_default_joints.tolist(),
+                jointDamping=self.joint_damping.tolist(),
+                # maxNumIterations=100
+            )
+        )
+        return joint_pos
+
+    def set_joint_positions(self, joint_pos):
+        # Move the joints to specified positions
+        set_joint_positions(self.robot_ids[0], self.joint_ids, joint_pos)
+        if self.object_in_hand is not None:
+            world_to_base_link = get_com_pose(
+                self.robot_ids[0],
+                self.eef_link_id)
+
+            base_link_to_held_obj = p.invertTransform(
+                *self.child_frame_transform)
+            world_to_held_obj = p.multiplyTransforms(world_to_base_link[0],
+                                                     world_to_base_link[1],
+                                                     base_link_to_held_obj[0],
+                                                     base_link_to_held_obj[1])
+            p.resetBasePositionAndOrientation(
+                self.object_in_hand,
+                world_to_held_obj[0],
+                world_to_held_obj[1])        
+
+    def set_eef_position_orientation(self, pos, orn):
+        # Set position and orientation of the Fetch gripper
+        joint_pos = self.calculate_eef_ik(pos, orn)
+        self.set_joint_positions(joint_pos)
+

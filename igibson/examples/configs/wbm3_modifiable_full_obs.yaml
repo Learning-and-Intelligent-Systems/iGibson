@@ -11,7 +11,7 @@ texture_randomization_freq: null
 object_randomization_freq: null
 
 # robot
-robot: BehaviorRobot
+robot: robot_placeholder
 
 # task
 # task: cleaning_cupboards
@@ -64,3 +64,18 @@ target_visual_object_visible_to_agent: false
 hand_threshold: 0.4
 hand_speed: 0.3
 body_speed: 0.3
+
+controller:
+  input_max: 1
+  input_min: 0
+  output_max: 1
+  output_min: 0
+  mode: "pose_delta_ori"
+  eef_always_in_frame: false
+  neutral_xy: [0.25, 0]
+  radius_limit: 0.5
+  height_limits: [0.2, 1.5]
+  kv_vel: 1
+
+# This makes it easier to grasp the object with the Fetch
+ag_strict_mode: false 
