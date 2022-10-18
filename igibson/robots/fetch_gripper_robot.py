@@ -13,6 +13,7 @@ from igibson.external.pybullet_tools.utils import (
     joints_from_names,
     set_coll_filter,
     set_joint_positions,
+    get_joint_positions
 )
 from igibson.robots.robot_locomotor import LocomotorRobot
 
@@ -631,6 +632,12 @@ class FetchGripper(LocomotorRobot):
 
     def establish_grasp(self, ag_data):
         ag_bid, ag_link = ag_data
+        ##### Moving object to hand CHEATING
+        p.resetBasePositionAndOrientation(
+                ag_bid,
+                self.get_end_effector_position(),
+                np.array([0,0,0,1]))
+        #####
 
         self.child_frame_transform = get_child_frame_pose(
             parent_bid=self.get_body_id(), parent_link=self.eef_link_id, child_bid=ag_bid, child_link=ag_link
@@ -798,43 +805,62 @@ class FetchGripper(LocomotorRobot):
 
     def calculate_eef_ik(self, pos, orn):
         # Does not validate the correctness of the IK
+        current_joint_position = np.array(get_joint_positions(self.robot_ids[0], self.joint_ids))
+        lower_limits = self.lower_joint_limits
+        upper_limits = self.upper_joint_limits
+        ranges = self.joint_range
+        fixed_joints = np.array([0, 1, 3, 4, 12, 13])   # wheels, head, and gripper
+        lower_limits[fixed_joints] = current_joint_position[fixed_joints]
+        upper_limits[fixed_joints] = current_joint_position[fixed_joints]
+        ranges[fixed_joints] - current_joint_position[fixed_joints]
+
         joint_pos = np.array(
             p.calculateInverseKinematics(
                 bodyIndex=self.robot_ids[0],
                 endEffectorLinkIndex=self.eef_link_id,
                 targetPosition=pos,
                 targetOrientation=orn,
-                lowerLimits=self.lower_joint_limits.tolist(),
-                upperLimits=self.upper_joint_limits.tolist(),
-                jointRanges=self.joint_range.tolist(),
-                restPoses=self.untucked_default_joints.tolist(),
+                lowerLimits=lower_limits.tolist(),
+                upperLimits=upper_limits.tolist(),
+                jointRanges=ranges.tolist(),
+                restPoses=current_joint_position.tolist(),
                 jointDamping=self.joint_damping.tolist(),
                 # maxNumIterations=100
             )
         )
         return joint_pos
 
+    def set_position_orientation(self, pos, orn):
+        super(FetchGripper, self).set_position_orientation(pos, orn)
+        if self.object_in_hand is not None:
+            self.satisfy_holding_constraint()    
+
+    def satisfy_holding_constraint(self):
+        world_to_base_link = get_com_pose(
+            self.robot_ids[0],
+            self.eef_link_id)
+
+        base_link_to_held_obj = p.invertTransform(
+            *self.child_frame_transform)
+        world_to_held_obj = p.multiplyTransforms(world_to_base_link[0],
+                                                 world_to_base_link[1],
+                                                 base_link_to_held_obj[0],
+                                                 base_link_to_held_obj[1])
+        p.resetBasePositionAndOrientation(
+            self.object_in_hand,
+            world_to_held_obj[0],
+            world_to_held_obj[1])
+
     def set_joint_positions(self, joint_pos):
         # Move the joints to specified positions
         set_joint_positions(self.robot_ids[0], self.joint_ids, joint_pos)
         if self.object_in_hand is not None:
-            world_to_base_link = get_com_pose(
-                self.robot_ids[0],
-                self.eef_link_id)
-
-            base_link_to_held_obj = p.invertTransform(
-                *self.child_frame_transform)
-            world_to_held_obj = p.multiplyTransforms(world_to_base_link[0],
-                                                     world_to_base_link[1],
-                                                     base_link_to_held_obj[0],
-                                                     base_link_to_held_obj[1])
-            p.resetBasePositionAndOrientation(
-                self.object_in_hand,
-                world_to_held_obj[0],
-                world_to_held_obj[1])        
+            self.satisfy_holding_constraint()    
 
     def set_eef_position_orientation(self, pos, orn):
         # Set position and orientation of the Fetch gripper
         joint_pos = self.calculate_eef_ik(pos, orn)
         self.set_joint_positions(joint_pos)
 
+    def set_eef_position(self, pos):
+        self.set_eef_position_orientation(pos, None)
