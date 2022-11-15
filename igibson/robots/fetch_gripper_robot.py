@@ -796,15 +796,15 @@ class FetchGripper(LocomotorRobot):
         return "agent"
 
     def calculate_eef_ik(self, gripper_pos, gripper_orn):
-        MAX_IK_ATTEMPTS = 25
+        MAX_IK_ATTEMPTS = 100
         # Does not validate the correctness of the IK
         current_joint_position = np.array(get_joint_positions(self.robot_ids[0], self.joint_ids))
         # fixed_joints = np.array([0, 1, 3, 4, 12, 13])   # wheels, head, and gripper
 
         # The FastIK solver solves for the wrist roll link, so compute the transforms so
-        # the gripper link is at the desired pose
+        # the grasp_point link is at the desired pose
         gripper_to_world = p.invertTransform(*get_link_pose(
-            self.robot_ids[0], self.eef_link_id))
+            self.robot_ids[0], self.parts["grasp_point"].body_part_index))
         world_to_wrist = get_link_pose(self.robot_ids[0], self.parts["wrist_roll_link"].body_part_index)
         gripper_to_wrist = p.multiplyTransforms(gripper_to_world[0],
                                                 gripper_to_world[1],
@@ -814,17 +814,22 @@ class FetchGripper(LocomotorRobot):
                                                      gripper_orn,
                                                      gripper_to_wrist[0],
                                                      gripper_to_wrist[1])
-
-        base_link_to_world = p.invertTransform(*get_link_pose(
-            self.robot_ids[0],
-            self.parts["torso_lift_link"].body_part_index))
-        base_link_to_target = p.multiplyTransforms(base_link_to_world[0],
-                                                   base_link_to_world[1],
-                                                   target_world_to_wrist[0],
-                                                   target_world_to_wrist[1])
-        rel_pos = base_link_to_target[0]
-        rel_orn = p.getMatrixFromQuaternion(base_link_to_target[1])
+        if gripper_pos[2] < 0.35:
+            lift_joint = 0
+        else:
+            lift_joint = current_joint_position[2]
+        current_joint_position[2] = self.untucked_default_joints[2]
+        self.set_joint_positions(current_joint_position)
         for i in range(MAX_IK_ATTEMPTS):
+            base_link_to_world = p.invertTransform(*get_link_pose(
+                self.robot_ids[0],
+                self.parts["torso_lift_link"].body_part_index))
+            base_link_to_target = p.multiplyTransforms(base_link_to_world[0],
+                                                       base_link_to_world[1],
+                                                       target_world_to_wrist[0],
+                                                       target_world_to_wrist[1])
+            rel_pos = base_link_to_target[0]
+            rel_orn = p.getMatrixFromQuaternion(base_link_to_target[1])
             pfree = np.random.rand() * self.joint_range[5] + self.lower_joint_limits[5]
             joint_pos_ik = ik.inverse(list(rel_pos), list(rel_orn), pfree)
             if len(joint_pos_ik) > 0:
