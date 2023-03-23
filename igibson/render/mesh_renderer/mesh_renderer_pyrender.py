@@ -107,7 +107,7 @@ class MeshRendererPyRender(object):
             pose=V,
         )
 
-        self.rr = pyrender.OffscreenRenderer(self.width, self.height)
+        # self.rr = pyrender.OffscreenRenderer(self.width, self.height)
 
         self.material_idx_to_material_instance_mapping = {}
         self.shape_material_idx = []
@@ -256,8 +256,9 @@ class MeshRendererPyRender(object):
         if modes != ("rgb",):
             raise ValueError("Not implemented")
 
-        color = self.rr.render(self.scene)[0]
-        return [np.concatenate([color, np.ones((self.height, self.width, 1))], axis=-1).astype(np.float32)]
+        # color = self.rr.render(self.scene)[0]
+        # return [np.concatenate([color, np.ones((self.height, self.width, 1))], axis=-1).astype(np.float32)]
+        return [np.concatenate([np.ones((self.height, self.width, 1)), np.ones((self.height, self.width, 1))], axis=-1).astype(np.float32)]
 
     def get_instances(self):
         """
