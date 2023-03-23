@@ -1739,12 +1739,13 @@ class Simulator:
         Note 2: this function only works with the optimized renderer - please use the renderer hidden
         list to hide objects in the non-optimized renderer
         """
-        # Find instance corresponding to this id in the renderer
-        for instance in self.renderer.instances:
-            if obj.body_id == instance.pybullet_uuid:
-                instance.hidden = hide
-                self.renderer.update_hidden_highlight_state([instance])
-                return
+        pass
+        # # Find instance corresponding to this id in the renderer
+        # for instance in self.renderer.instances:
+        #     if obj.body_id == instance.pybullet_uuid:
+        #         instance.hidden = hide
+        #         self.renderer.update_hidden_highlight_state([instance])
+        #         return
 
     def set_hud_state(self, state):
         """
