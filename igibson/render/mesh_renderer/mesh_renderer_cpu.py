@@ -12,16 +12,19 @@ import igibson
 import igibson.render.mesh_renderer as mesh_renderer
 from igibson.render.mesh_renderer import tinyobjloader
 from igibson.render.mesh_renderer.get_available_devices import get_available_devices
-from igibson.render.mesh_renderer.instances import Instance, InstanceGroup, Robot
+from igibson.render.mesh_renderer.instances import InstanceGroup
 from igibson.render.mesh_renderer.materials import Material, ProceduralMaterial, RandomizedMaterial
 from igibson.render.mesh_renderer.mesh_renderer_settings import MeshRendererSettings
 from igibson.render.mesh_renderer.text import Text, TextManager
 from igibson.render.mesh_renderer.visual_object import VisualObject
-from igibson.robots.behavior_robot import BehaviorRobot
+from igibson.robots.robot_base import BaseRobot
 from igibson.utils.constants import AVAILABLE_MODALITIES, MAX_CLASS_COUNT, MAX_INSTANCE_COUNT, ShadowPass
 from igibson.utils.mesh_util import lookat, mat2xyz, ortho, perspective, quat2rotmat, safemat2quat, xyz2mat, xyzw2wxyz
 
+log = logging.getLogger(__name__)
+
 Image.MAX_IMAGE_PIXELS = None
+NO_MATERIAL_DEFINED_IN_SHAPE_AND_NO_OVERWRITE_SUPPLIED = -1
 
 
 class MeshRenderer(object):
@@ -45,8 +48,8 @@ class MeshRenderer(object):
         :param height: width of the renderer output
         :param vertical_fov: vertical field of view for the renderer
         :param device_idx: which GPU to run the renderer on
-        :param render_settings: rendering settings
-        :param simulator: Simulator object.
+        :param rendering_settings: rendering settings
+        :param simulator: simulator object
         """
         self.simulator = simulator
         self.rendering_settings = rendering_settings
@@ -67,6 +70,7 @@ class MeshRenderer(object):
         self.height = height
         self.faces = []
         self.instances = []
+        self.update_instance_id_to_pb_id_map()
         self.fisheye = rendering_settings.use_fisheye
         self.optimized = rendering_settings.optimized
         self.texture_files = {}
@@ -82,47 +86,13 @@ class MeshRenderer(object):
         self.text_manager = TextManager(self)
         self.texts = []
 
-        device = None
-        """
-        device_idx is the major id
-        device is the minor id
-        you can get it from nvidia-smi -a
-
-        The minor number for the device is such that the Nvidia device node file for each GPU will have the form
-        /dev/nvidia[minor number]. Available only on Linux platform.
-
-        TODO: add device management for windows platform.
-        """
-
-        if os.environ.get("GIBSON_DEVICE_ID", None):
-            device = int(os.environ.get("GIBSON_DEVICE_ID"))
-            logging.info(
-                "GIBSON_DEVICE_ID environment variable has been manually set. "
-                "Using device {} for rendering".format(device)
-            )
-        else:
-            if self.platform != "Windows":
-                available_devices = get_available_devices()
-                if device_idx < len(available_devices):
-                    device = available_devices[device_idx]
-                    logging.info("Using device {} for rendering".format(device))
-                else:
-                    logging.info("Device index is larger than number of devices, falling back to use 0")
-                    logging.info(
-                        "If you have trouble using EGL, please visit our trouble shooting guide",
-                        "at http://svl.stanford.edu/igibson/docs/issues.html",
-                    )
-
-                    device = 0
-
-        self.device_idx = device_idx
-        self.device_minor = device
         self.msaa = rendering_settings.msaa
-        if self.platform == "Darwin" and self.optimized:
-            logging.error("Optimized renderer is not supported on Mac")
-            exit()
+
         if self.platform == "Darwin":
-            from igibson.render.mesh_renderer import GLFWRendererContext
+            if self.optimized:
+                log.error("Optimized renderer is not supported on Mac")
+                exit()
+            from igibson.render.mesh_renderer import GLFWRendererContext  # type: ignore
 
             self.r = GLFWRendererContext.GLFWRendererContext(
                 width,
@@ -132,8 +102,9 @@ class MeshRenderer(object):
                 self.rendering_settings.show_glfw_window,
                 rendering_settings.fullscreen,
             )
-        elif self.platform == "Windows":
-            from igibson.render.mesh_renderer import VRRendererContext
+
+        elif self.platform == "Windows" or self.__class__.__name__ == "MeshRendererVR":
+            from igibson.render.mesh_renderer import VRRendererContext  # type: ignore
 
             self.r = VRRendererContext.VRRendererContext(
                 width,
@@ -143,113 +114,95 @@ class MeshRenderer(object):
                 self.rendering_settings.show_glfw_window,
                 rendering_settings.fullscreen,
             )
-        else:
+
+        elif self.platform == "Linux":
             from igibson.render.mesh_renderer import EGLRendererContext
 
-            self.r = EGLRendererContext.EGLRendererContext(width, height, device)
+            """
+            device_idx is the major id
+            device is the minor id
+            you can get it from nvidia-smi -a
 
+            The minor number for the device is such that the Nvidia device node file for each GPU will have the form
+            /dev/nvidia[minor number]. Available only on Linux platform.
+
+            """
+
+            device = os.environ.get("GIBSON_DEVICE_ID", None)
+            if device:
+                device = int(device)
+                log.debug(
+                    "GIBSON_DEVICE_ID environment variable has been manually set. "
+                    "Using device {} for rendering".format(device)
+                )
+            else:
+                available_devices, _ = get_available_devices()
+                if device_idx < len(available_devices):
+                    device = available_devices[device_idx]
+                    log.debug("Using device {} for rendering".format(device))
+                else:
+                    log.warning("Device index is larger than number of devices, falling back to use 0")
+                    log.warning(
+                        "If you have trouble using EGL, please visit our trouble shooting guide"
+                        "at http://svl.stanford.edu/igibson/docs/issues.html",
+                    )
+
+                    device = 0
+
+            self.device_idx = device_idx
+            self.device_minor = device
+
+            self.r = EGLRendererContext.EGLRendererContext(width, height, device)
+        else:
+            raise Exception("Unsupported platform and renderer combination")
+
+        if log.isEnabledFor(logging.DEBUG):
+            self.r.verbosity = 20
+        elif log.isEnabledFor(logging.INFO):
+            self.r.verbosity = 10
+        else:
+            self.r.verbosity = 0
         self.r.init()
 
         self.glstring = self.r.getstring_meshrenderer()
 
-        logging.debug("Rendering device and GL version")
-        logging.debug(self.glstring)
+        log.debug("Rendering device and GL version")
+        log.debug(self.glstring)
 
         self.colors = [[1, 0, 0], [0, 1, 0], [0, 0, 1]]
         self.lightcolor = [1, 1, 1]
 
-        logging.debug("Is using fisheye camera: {}".format(self.fisheye))
+        log.debug("Is using fisheye camera: {}".format(self.fisheye))
+
+        if self.rendering_settings.glsl_version_override:
+            glsl_version = str(self.rendering_settings.glsl_version_override)
+            shader_available = glsl_version in ["450", "460"]
+            assert shader_available, "Error: only GLSL version 450 and 460 shaders are supported"
+        else:
+            glsl_version = "460"
 
         if self.fisheye:
-            logging.error("Fisheye is currently not supported.")
+            log.error("Fisheye is currently not supported.")
             exit(1)
         else:
             if self.platform == "Darwin":
-                self.shaderProgram = self.r.compile_shader_meshrenderer(
-                    "".join(
-                        open(
-                            os.path.join(os.path.dirname(mesh_renderer.__file__), "shaders", "410", "vert.shader")
-                        ).readlines()
-                    ),
-                    "".join(
-                        open(
-                            os.path.join(os.path.dirname(mesh_renderer.__file__), "shaders", "410", "frag.shader")
-                        ).readlines()
-                    ),
-                )
-                self.textShaderProgram = self.r.compile_shader_meshrenderer(
-                    "".join(
-                        open(
-                            os.path.join(os.path.dirname(mesh_renderer.__file__), "shaders", "410", "text_vert.shader")
-                        ).readlines()
-                    ),
-                    "".join(
-                        open(
-                            os.path.join(os.path.dirname(mesh_renderer.__file__), "shaders", "410", "text_frag.shader")
-                        ).readlines()
-                    ),
-                )
+                self.shaderProgram = self._get_shader_program("410", "vert.shader", "frag.shader")
+                self.textShaderProgram = self._get_shader_program("410", "text_vert.shader", "text_frag.shader")
             else:
                 if self.optimized:
-                    self.shaderProgram = self.r.compile_shader_meshrenderer(
-                        "".join(
-                            open(
-                                os.path.join(
-                                    os.path.dirname(mesh_renderer.__file__), "shaders", "450", "optimized_vert.shader"
-                                )
-                            ).readlines()
-                        ),
-                        "".join(
-                            open(
-                                os.path.join(
-                                    os.path.dirname(mesh_renderer.__file__), "shaders", "450", "optimized_frag.shader"
-                                )
-                            ).readlines()
-                        ),
+                    self.shaderProgram = self._get_shader_program(
+                        glsl_version, "optimized_vert.shader", "optimized_frag.shader"
                     )
                 else:
-                    self.shaderProgram = self.r.compile_shader_meshrenderer(
-                        "".join(
-                            open(
-                                os.path.join(os.path.dirname(mesh_renderer.__file__), "shaders", "450", "vert.shader")
-                            ).readlines()
-                        ),
-                        "".join(
-                            open(
-                                os.path.join(os.path.dirname(mesh_renderer.__file__), "shaders", "450", "frag.shader")
-                            ).readlines()
-                        ),
-                    )
-                self.textShaderProgram = self.r.compile_shader_meshrenderer(
-                    "".join(
-                        open(
-                            os.path.join(os.path.dirname(mesh_renderer.__file__), "shaders", "450", "text_vert.shader")
-                        ).readlines()
-                    ),
-                    "".join(
-                        open(
-                            os.path.join(os.path.dirname(mesh_renderer.__file__), "shaders", "450", "text_frag.shader")
-                        ).readlines()
-                    ),
-                )
+                    self.shaderProgram = self._get_shader_program(glsl_version, "vert.shader", "frag.shader")
+                self.textShaderProgram = self._get_shader_program(glsl_version, "text_vert.shader", "text_frag.shader")
 
-            self.skyboxShaderProgram = self.r.compile_shader_meshrenderer(
-                "".join(
-                    open(
-                        os.path.join(os.path.dirname(mesh_renderer.__file__), "shaders", "410", "skybox_vs.glsl")
-                    ).readlines()
-                ),
-                "".join(
-                    open(
-                        os.path.join(os.path.dirname(mesh_renderer.__file__), "shaders", "410", "skybox_fs.glsl")
-                    ).readlines()
-                ),
-            )
+            self.skyboxShaderProgram = self._get_shader_program("410", "skybox_vs.glsl", "skybox_fs.glsl")
 
         # default light looking down and tilted
         self.set_light_position_direction([0, 0, 2], [0, 0.5, 0])
 
-        self.setup_framebuffer()
+        self._setup_framebuffer()
         self.vertical_fov = vertical_fov
         self.horizontal_fov = (
             2 * np.arctan(np.tan(self.vertical_fov / 180.0 * np.pi / 2.0) * self.width / self.height) / np.pi * 180.0
@@ -280,16 +233,40 @@ class MeshRenderer(object):
 
         self.skybox_size = rendering_settings.skybox_size
         if not self.platform == "Darwin" and rendering_settings.enable_pbr:
-            self.setup_pbr()
+            self._setup_pbr(glsl_version)
 
         self.setup_lidar_param()
 
         # Set up text FBO
         self.text_manager.gen_text_fbo()
 
-    def setup_pbr(self):
+    def _get_shader_program(self, glsl_version, vertex_source, fragment_source):
         """
-        Set up physics-based rendering
+        Get shader program.
+
+        :param glsl_version: GLSL version
+        :param vertex_source: vertex shader source
+        :param fragment_source: fragment shader source
+        :return: a program object to which vertex shader and fragment shader are attached
+        """
+        return self.r.compile_shader_meshrenderer(
+            "".join(
+                open(
+                    os.path.join(os.path.dirname(mesh_renderer.__file__), "shaders", glsl_version, vertex_source)
+                ).readlines()
+            ),
+            "".join(
+                open(
+                    os.path.join(os.path.dirname(mesh_renderer.__file__), "shaders", glsl_version, fragment_source)
+                ).readlines()
+            ),
+        )
+
+    def _setup_pbr(self, glsl_version):
+        """
+        Set up physics-based rendering.
+
+        :param glsl_version: GLSL version
         """
         if (
             os.path.exists(self.rendering_settings.env_texture_filename)
@@ -297,7 +274,7 @@ class MeshRenderer(object):
             or os.path.exists(self.rendering_settings.env_texture_filename3)
         ):
             self.r.setup_pbr(
-                os.path.join(os.path.dirname(mesh_renderer.__file__), "shaders", "450"),
+                os.path.join(os.path.dirname(mesh_renderer.__file__), "shaders", glsl_version),
                 self.rendering_settings.env_texture_filename,
                 self.rendering_settings.env_texture_filename2,
                 self.rendering_settings.env_texture_filename3,
@@ -305,13 +282,13 @@ class MeshRenderer(object):
                 self.rendering_settings.light_dimming_factor,
             )
         else:
-            logging.warning("Environment texture not available, cannot use PBR.")
+            log.warning("Environment texture not available, cannot use PBR.")
         if self.rendering_settings.enable_pbr:
             self.r.loadSkyBox(self.skyboxShaderProgram, self.skybox_size)
 
     def set_light_position_direction(self, position, target):
         """
-        Set light position and orientation
+        Set light position and orientation.
 
         :param position: light position
         :param target: light target
@@ -319,9 +296,9 @@ class MeshRenderer(object):
         self.lightpos = position
         self.lightV = lookat(self.lightpos, target, [0, 1, 0])
 
-    def setup_framebuffer(self):
+    def _setup_framebuffer(self):
         """
-        Set up framebuffers for the renderer
+        Set up framebuffers for the renderer.
         """
         [
             self.fbo,
@@ -350,12 +327,13 @@ class MeshRenderer(object):
 
         self.depth_tex_shadow = self.r.allocateTexture(self.width, self.height)
 
-    def load_texture_file(self, tex_filename):
+    def _load_texture_file(self, tex_filename, texture_scale):
         """
-        Load the texture file into the renderer
+        Load the texture file into the renderer.
 
         :param tex_filename: texture file filename
-        :return texture_id: texture id of this texture in the renderer
+        :param texture_scale: a file-specific texture scale to be multiplied with the global scale in the settings
+        :return: texture id of this texture in the renderer
         """
         # if texture is None or does not exist, return None
         if tex_filename is None or (not os.path.isfile(tex_filename)):
@@ -369,32 +347,36 @@ class MeshRenderer(object):
             # assume optimized renderer will have texture id starting from 0
             texture_id = len(self.texture_files)
         else:
-            texture_id = self.r.loadTexture(tex_filename, self.rendering_settings.texture_scale, igibson.key_path)
+            texture_id = self.r.loadTexture(
+                tex_filename, texture_scale * self.rendering_settings.texture_scale, igibson.key_path
+            )
             self.textures.append(texture_id)
 
         self.texture_files[tex_filename] = texture_id
         return texture_id
 
-    def load_procedural_material(self, material):
+    def load_procedural_material(self, material, texture_scale):
         material.lookup_or_create_transformed_texture()
         has_encrypted_texture = os.path.exists(os.path.join(material.material_folder, "DIFFUSE.encrypted.png"))
         suffix = ".encrypted.png" if has_encrypted_texture else ".png"
-        material.texture_id = self.load_texture_file(os.path.join(material.material_folder, "DIFFUSE{}".format(suffix)))
-        material.metallic_texture_id = self.load_texture_file(
-            os.path.join(material.material_folder, "METALLIC{}".format(suffix))
+        material.texture_id = self._load_texture_file(
+            os.path.join(material.material_folder, "DIFFUSE{}".format(suffix)), texture_scale
         )
-        material.roughness_texture_id = self.load_texture_file(
-            os.path.join(material.material_folder, "ROUGHNESS{}".format(suffix))
+        material.metallic_texture_id = self._load_texture_file(
+            os.path.join(material.material_folder, "METALLIC{}".format(suffix)), texture_scale
         )
-        material.normal_texture_id = self.load_texture_file(
-            os.path.join(material.material_folder, "NORMAL{}".format(suffix))
+        material.roughness_texture_id = self._load_texture_file(
+            os.path.join(material.material_folder, "ROUGHNESS{}".format(suffix)), texture_scale
+        )
+        material.normal_texture_id = self._load_texture_file(
+            os.path.join(material.material_folder, "NORMAL{}".format(suffix)), texture_scale
         )
         for state in material.states:
-            transformed_diffuse_id = self.load_texture_file(material.texture_filenames[state])
+            transformed_diffuse_id = self._load_texture_file(material.texture_filenames[state], texture_scale)
             material.texture_ids[state] = transformed_diffuse_id
         material.default_texture_id = material.texture_id
 
-    def load_randomized_material(self, material):
+    def load_randomized_material(self, material, texture_scale):
         """
         Load all the texture files in the RandomizedMaterial.
         Populate material_ids with the texture id assigned by the renderer.
@@ -411,7 +393,7 @@ class MeshRenderer(object):
             for material_instance in material.material_files[material_class]:
                 material_id_instance = {}
                 for key in material_instance:
-                    material_id_instance[key] = self.load_texture_file(material_instance[key])
+                    material_id_instance[key] = self._load_texture_file(material_instance[key], texture_scale)
                 material.material_ids[material_class].append(material_id_instance)
         material.randomize()
 
@@ -423,7 +405,6 @@ class MeshRenderer(object):
         transform_pos=None,
         input_kd=None,
         texture_scale=1.0,
-        load_texture=True,
         overwrite_material=None,
     ):
         """
@@ -434,19 +415,16 @@ class MeshRenderer(object):
         :param transform_orn: rotation quaternion, convention xyzw
         :param transform_pos: translation for loading, it is a list of length 3
         :param input_kd: if loading material fails, use this default material. input_kd should be a list of length 3
-        :param texture_scale: texture scale for the object, downsample to save memory.
-        :param load_texture: load texture or not
+        :param texture_scale: texture scale for the object, downsample to save memory
         :param overwrite_material: whether to overwrite the default Material (usually with a RandomizedMaterial for material randomization)
         :return: VAO_ids
         """
         if self.optimization_process_executed and self.optimized:
-            logging.error(
-                "Using optimized renderer and optimization process is already excuted, cannot add new " "objects"
-            )
+            log.error("Using optimized renderer and optimization process is already excuted, cannot add new objects")
             return
 
         reader = tinyobjloader.ObjReader()
-        # logging.info("Loading {}".format(obj_path))
+        log.debug("Loading {}".format(obj_path))
         if obj_path.endswith("encrypted.obj"):
             if not os.path.exists(igibson.key_path):
                 raise FileNotFoundError(
@@ -458,53 +436,61 @@ class MeshRenderer(object):
         vertex_data_indices = []
         face_indices = []
         if not ret:
-            logging.error("Warning: {}".format(reader.Warning()))
-            logging.error("Error: {}".format(reader.Error()))
-            logging.error("Failed to load: {}".format(obj_path))
+            log.error("Warning: {}".format(reader.Warning()))
+            log.error("Error: {}".format(reader.Error()))
+            log.error("Failed to load: {}".format(obj_path))
             sys.exit(-1)
 
         if reader.Warning():
-            logging.warning("Warning: {}".format(reader.Warning()))
+            log.warning("Warning: {}".format(reader.Warning()))
 
         attrib = reader.GetAttrib()
-        logging.debug("Num vertices = {}".format(len(attrib.vertices)))
-        logging.debug("Num normals = {}".format(len(attrib.normals)))
-        logging.debug("Num texcoords = {}".format(len(attrib.texcoords)))
+        log.debug("Num vertices = {}".format(len(attrib.vertices)))
+        log.debug("Num normals = {}".format(len(attrib.normals)))
+        log.debug("Num texcoords = {}".format(len(attrib.texcoords)))
 
         materials = reader.GetMaterials()
-        logging.debug("Num materials: {}".format(len(materials)))
+        log.debug("Num materials: {}".format(len(materials)))
 
-        if logging.root.level <= logging.DEBUG:  # Only going into this if it is for logging --> efficiency
+        if log.isEnabledFor(logging.DEBUG):  # Only going into this if it is for logging --> efficiency
             for m in materials:
-                logging.debug("Material name: {}".format(m.name))
-                logging.debug("Material diffuse: {}".format(m.diffuse))
+                log.debug("Material name: {}".format(m.name))
+                log.debug("Material diffuse: {}".format(m.diffuse))
 
         shapes = reader.GetShapes()
-        logging.debug("Num shapes: {}".format(len(shapes)))
+        log.debug("Num shapes: {}".format(len(shapes)))
 
         if overwrite_material is not None and len(materials) > 1:
-            logging.warning("passed in one material ends up overwriting multiple materials")
+            log.warning("passed in one material ends up overwriting multiple materials")
 
         # set the default values of variable before being modified later.
         num_existing_mats = len(self.material_idx_to_material_instance_mapping)  # Number of current Material elements
-        num_added_materials = len(materials)
 
-        if num_added_materials > 0:
+        # No MTL is supplied, or MTL is empty
+        if len(materials) == 0:
+            # Case when mesh obj is without mtl file but overwrite material is specified.
+            if overwrite_material is not None:
+                self.material_idx_to_material_instance_mapping[num_existing_mats] = overwrite_material
+                num_added_materials = 1
+            else:
+                num_added_materials = 0
+        else:
             # Deparse the materials in the obj file by loading textures into the renderer's memory and creating a
             # Material element for them
+            num_added_materials = len(materials)
             for i, item in enumerate(materials):
                 if overwrite_material is not None:
-                    if isinstance(overwrite_material, RandomizedMaterial):
-                        self.load_randomized_material(overwrite_material)
-                    elif isinstance(overwrite_material, ProceduralMaterial):
-                        self.load_procedural_material(overwrite_material)
                     material = overwrite_material
-                elif item.diffuse_texname != "" and load_texture:
+                elif item.diffuse_texname != "" and self.rendering_settings.load_textures:
                     obj_dir = os.path.dirname(obj_path)
-                    texture = self.load_texture_file(os.path.join(obj_dir, item.diffuse_texname))
-                    texture_metallic = self.load_texture_file(os.path.join(obj_dir, item.metallic_texname))
-                    texture_roughness = self.load_texture_file(os.path.join(obj_dir, item.roughness_texname))
-                    texture_normal = self.load_texture_file(os.path.join(obj_dir, item.bump_texname))
+                    texture = self._load_texture_file(os.path.join(obj_dir, item.diffuse_texname), texture_scale)
+                    texture_metallic = self._load_texture_file(
+                        os.path.join(obj_dir, item.metallic_texname), texture_scale
+                    )
+                    texture_roughness = self._load_texture_file(
+                        os.path.join(obj_dir, item.roughness_texname), texture_scale
+                    )
+                    texture_normal = self._load_texture_file(os.path.join(obj_dir, item.bump_texname), texture_scale)
                     material = Material(
                         "texture",
                         texture_id=texture,
@@ -520,22 +506,19 @@ class MeshRenderer(object):
                     else:
                         material = Material("color", kd=item.diffuse)
                 self.material_idx_to_material_instance_mapping[num_existing_mats + i] = material
-        else:
-            # Case when mesh obj is without mtl file but overwrite material is specified.
-            if overwrite_material is not None:
-                self.material_idx_to_material_instance_mapping[num_existing_mats] = overwrite_material
-                num_added_materials = 1
 
-        # material index = num_existing_mats ... num_existing_mats + num_added_materials - 1 are using materials from mesh or
-        # from overwrite_material
+        # material index = num_existing_mats ... num_existing_mats + num_added_materials - 1 (inclusive) are using
+        # materials from mesh or from overwrite_material
         # material index = num_existing_mats + num_added_materials is a fail-safe default material
 
+        idx_of_failsafe_material = num_existing_mats + num_added_materials
+
         if input_kd is not None:  # append the default material in the end, in case material loading fails
-            self.material_idx_to_material_instance_mapping[num_existing_mats + num_added_materials] = Material(
+            self.material_idx_to_material_instance_mapping[idx_of_failsafe_material] = Material(
                 "color", kd=input_kd, texture_id=-1
             )
         else:
-            self.material_idx_to_material_instance_mapping[num_existing_mats + num_added_materials] = Material(
+            self.material_idx_to_material_instance_mapping[idx_of_failsafe_material] = Material(
                 "color", kd=[0.5, 0.5, 0.5], texture_id=-1
             )
 
@@ -546,17 +529,22 @@ class MeshRenderer(object):
         vertex_texcoord = np.array(attrib.texcoords).reshape((len(attrib.texcoords) // 2, 2))
 
         for shape in shapes:
-            logging.debug("Shape name: {}".format(shape.name))
-            if len(shape.mesh.material_ids) == 0:
+            log.debug("Shape name: {}".format(shape.name))
+            if len(shape.mesh.material_ids) == 0 or shape.mesh.material_ids[0] == -1:
+                # material not found, or invalid material, as defined here
+                # https://github.com/tinyobjloader/tinyobjloader/blob/master/tiny_obj_loader.h#L2997
                 if overwrite_material is not None:
                     material_id = 0
+                    # shape don't have material id, use material 0, which is the overwrite material
                 else:
-                    material_id = -1  # if no material and no overwrite material is supplied
+                    material_id = NO_MATERIAL_DEFINED_IN_SHAPE_AND_NO_OVERWRITE_SUPPLIED
+                    # if no material and no overwrite material is supplied
             else:
                 material_id = shape.mesh.material_ids[0]
+                # assumption: each shape only have one material
 
-            logging.debug("material_id = {}".format(material_id))
-            logging.debug("num_indices = {}".format(len(shape.mesh.indices)))
+            log.debug("material_id = {}".format(material_id))
+            log.debug("num_indices = {}".format(len(shape.mesh.indices)))
             n_indices = len(shape.mesh.indices)
             np_indices = shape.mesh.numpy_indices().reshape((n_indices, 3))
 
@@ -595,22 +583,30 @@ class MeshRenderer(object):
                 # Translate the shape after they are scaled
                 shape_vertex += np.array(transform_pos)
 
+            # Compute tangents and bitangents for tangent space normal mapping.
             v0 = shape_vertex[0::3, :]
             v1 = shape_vertex[1::3, :]
             v2 = shape_vertex[2::3, :]
             uv0 = shape_texcoord[0::3, :]
             uv1 = shape_texcoord[1::3, :]
             uv2 = shape_texcoord[2::3, :]
-
             delta_pos1 = v1 - v0
             delta_pos2 = v2 - v0
             delta_uv1 = uv1 - uv0
             delta_uv2 = uv2 - uv0
-            r = 1.0 / (delta_uv1[:, 0] * delta_uv2[:, 1] - delta_uv1[:, 1] * delta_uv2[:, 0])
-            tangent = (delta_pos1 * delta_uv2[:, 1][:, None] - delta_pos2 * delta_uv1[:, 1][:, None]) * r[:, None]
-            bitangent = (delta_pos2 * delta_uv1[:, 0][:, None] - delta_pos1 * delta_uv2[:, 0][:, None]) * r[:, None]
-            bitangent = bitangent.repeat(3, axis=0)
+            d = delta_uv1[:, 0] * delta_uv2[:, 1] - delta_uv1[:, 1] * delta_uv2[:, 0]
+            # filter zero values
+            d[np.abs(d) < 1e-10] = 1e-10
+            tangent = (delta_pos1 * delta_uv2[:, 1][:, None] - delta_pos2 * delta_uv1[:, 1][:, None]) * (1.0 / d)[
+                :, None
+            ]
+            bitangent = (delta_pos2 * delta_uv1[:, 0][:, None] - delta_pos1 * delta_uv2[:, 0][:, None]) * (1.0 / d)[
+                :, None
+            ]
+            # Set the same tangent and bitangent for all three vertices of the triangle.
             tangent = tangent.repeat(3, axis=0)
+            bitangent = bitangent.repeat(3, axis=0)
+
             vertices = np.concatenate([shape_vertex, shape_normal, shape_texcoord, tangent, bitangent], axis=-1)
             faces = np.array(range(len(vertices))).reshape((len(vertices) // 3, 3))
             vertexData = vertices.astype(np.float32)
@@ -624,13 +620,14 @@ class MeshRenderer(object):
             self.vertex_data.append(vertexData)
             self.shapes.append(shape)
             # if material loading fails, use the default material
-            if material_id == -1:
-                self.shape_material_idx.append(num_added_materials + num_existing_mats)
+            if material_id == NO_MATERIAL_DEFINED_IN_SHAPE_AND_NO_OVERWRITE_SUPPLIED:
+                # use fall back material
+                self.shape_material_idx.append(idx_of_failsafe_material)
             else:
                 self.shape_material_idx.append(material_id + num_existing_mats)
 
-            logging.debug("shape_material_idx: {}".format(self.shape_material_idx))
-            VAO_ids.append(self.get_num_objects() - 1)
+            log.debug("shape_material_idx: {}".format(self.shape_material_idx))
+            VAO_ids.append(len(self.objects) - 1)
 
         new_obj = VisualObject(
             obj_path,
@@ -643,94 +640,40 @@ class MeshRenderer(object):
         self.visual_objects.append(new_obj)
         return VAO_ids
 
-    def add_instance(
+    def add_instance_group(
         self,
-        object_id,
+        object_ids,
+        link_ids=[-1],
+        poses_trans=[np.eye(4)],
+        poses_rot=[np.eye(4)],
         pybullet_uuid=None,
+        ig_object=None,
         class_id=0,
-        pose_trans=np.eye(4),
-        pose_rot=np.eye(4),
         dynamic=False,
         softbody=False,
         use_pbr=True,
         use_pbr_mapping=True,
         shadow_caster=True,
-        parent_body=None,
+        parent_body_name=None,
     ):
         """
-        Create instance for a visual object and link it to pybullet
-
-        :param object_id: id of visual object
-        :param pybullet_uuid: body id in pybullet
-        :param class_id: class_id to render semantics
-        :param pose_trans: initial translations for the visual object
-        :param pose_rot: initial rotation matrix for the visual object
-        :param dynamic: whether the instance is dynamic
-        :param softbody: whether the instance is soft body
-        :param use_pbr: whether to use PBR
-        :param use_pbr_mapping: whether to use PBR mapping
-        :param shadow_caster: whether to cast shadow
-        :param parent_body: parent body name of current xml element (MuJoCo XML)
-        """
-        if self.optimization_process_executed and self.optimized:
-            logging.error(
-                "Using optimized renderer and optimization process is already excuted, cannot add new " "objects"
-            )
-            return
-
-        use_pbr = use_pbr and self.rendering_settings.enable_pbr
-        use_pbr_mapping = use_pbr_mapping and self.rendering_settings.enable_pbr
-
-        instance = Instance(
-            self.visual_objects[object_id],
-            id=len(self.instances),
-            pybullet_uuid=pybullet_uuid,
-            class_id=class_id,
-            pose_trans=pose_trans,
-            pose_rot=pose_rot,
-            dynamic=dynamic,
-            softbody=softbody,
-            use_pbr=use_pbr,
-            use_pbr_mapping=use_pbr_mapping,
-            shadow_caster=shadow_caster,
-            parent_body=parent_body,
-        )
-        self.instances.append(instance)
-
-    def add_instance_group(
-        self,
-        object_ids,
-        link_ids,
-        poses_trans,
-        poses_rot,
-        pybullet_uuid=None,
-        class_id=0,
-        dynamic=False,
-        robot=None,
-        use_pbr=True,
-        use_pbr_mapping=True,
-        shadow_caster=True,
-    ):
-        """
-        Create an instance group for a list of visual objects and link it to pybullet
+        Create an instance group for a list of visual objects and link it to pybullet.
 
         :param object_ids: object ids of the visual objects
         :param link_ids: link_ids in pybullet
         :param poses_trans: initial translations for each visual object
         :param poses_rot: initial rotation matrix for each visual object
         :param pybullet_uuid: body id in pybullet
+        :param ig_object: iGibson object associated with this instance group
         :param class_id: class_id to render semantics
         :param dynamic: whether the instance group is dynamic
-        :param robot: The robot associated with this InstanceGroup
         :param use_pbr: whether to use PBR
         :param use_pbr_mapping: whether to use PBR mapping
         :param shadow_caster: whether to cast shadow
         """
 
         if self.optimization_process_executed and self.optimized:
-            logging.error(
-                "Using optimized renderer and optimization process is already excuted, cannot add new " "objects"
-            )
+            log.error("Using optimized renderer and optimization process is already excuted, cannot add new " "objects")
             return
 
         use_pbr = use_pbr and self.rendering_settings.enable_pbr
@@ -741,53 +684,19 @@ class MeshRenderer(object):
             id=len(self.instances),
             link_ids=link_ids,
             pybullet_uuid=pybullet_uuid,
+            ig_object=ig_object,
             class_id=class_id,
             poses_trans=poses_trans,
             poses_rot=poses_rot,
             dynamic=dynamic,
-            robot=robot,
+            softbody=softbody,
             use_pbr=use_pbr,
             use_pbr_mapping=use_pbr_mapping,
             shadow_caster=shadow_caster,
+            parent_body_name=parent_body_name,
         )
         self.instances.append(instance_group)
-
-    def add_robot(
-        self, object_ids, link_ids, poses_trans, poses_rot, pybullet_uuid=None, class_id=0, dynamic=False, robot=None
-    ):
-        """
-        Create an instance group (a robot) for a list of visual objects and link it to pybullet
-
-        :param object_ids: object ids of the visual objects
-        :param link_ids: link_ids in pybullet
-        :param poses_trans: initial translations for each visual object
-        :param poses_rot: initial rotation matrix for each visual object
-        :param pybullet_uuid: body id in pybullet
-        :param class_id: class_id to render semantics
-        :param dynamic: whether the instance group is dynamic
-        :param robot: The robot associated with this InstanceGroup
-        """
-
-        if self.optimization_process_executed and self.optimized:
-            logging.error(
-                "Using optimized renderer and optimization process is already excuted, cannot add new " "objects"
-            )
-            return
-
-        robot = Robot(
-            [self.visual_objects[object_id] for object_id in object_ids],
-            id=len(self.instances),
-            link_ids=link_ids,
-            pybullet_uuid=pybullet_uuid,
-            class_id=class_id,
-            poses_trans=poses_trans,
-            poses_rot=poses_rot,
-            dynamic=dynamic,
-            robot=robot,
-            use_pbr=False,
-            use_pbr_mapping=False,
-        )
-        self.instances.append(robot)
+        self.update_instance_id_to_pb_id_map()
 
     def add_text(
         self,
@@ -805,6 +714,7 @@ class MeshRenderer(object):
         """
         Creates a Text object with the given parameters. Returns the text object to the caller,
         so various settings can be changed - eg. text content, position, scale, etc.
+
         :param text_data: starting text to display (can be changed at a later time by set_text)
         :param font_name: name of font to render - same as font folder in iGibson assets
         :param font_style: style of font - one of [regular, italic, bold]
@@ -835,7 +745,7 @@ class MeshRenderer(object):
 
     def set_camera(self, camera, target, up, cache=False):
         """
-        Set camera pose
+        Set camera pose.
 
         :param camera: camera position
         :param target: camera target
@@ -857,7 +767,7 @@ class MeshRenderer(object):
 
     def set_z_near_z_far(self, znear, zfar):
         """
-        Set z limit for camera
+        Set z limit for camera.
 
         :param znear: lower limit for z
         :param zfar: upper limit for z
@@ -881,7 +791,7 @@ class MeshRenderer(object):
 
     def set_light_color(self, color):
         """
-        Set light color
+        Set light color.
 
         :param color: light color
         """
@@ -889,7 +799,7 @@ class MeshRenderer(object):
 
     def get_intrinsics(self):
         """
-        Get camera intrinsics
+        Get camera intrinsics.
 
         :return: camera instrincs
         """
@@ -913,7 +823,7 @@ class MeshRenderer(object):
 
     def set_projection_matrix(self, fu, fv, u0, v0, znear, zfar):
         """
-        Set projection matrix, given camera intrincs parameters
+        Set projection matrix, given camera intrincs parameters.
         """
         w = self.width
         h = self.height
@@ -933,7 +843,7 @@ class MeshRenderer(object):
         P[3, 2] = (2 * zfar * znear) / (znear - zfar)
         self.P = P
 
-    def readbuffer(self, modes=AVAILABLE_MODALITIES):
+    def _readbuffer(self, modes=AVAILABLE_MODALITIES):
         """
         Read framebuffer of rendering.
 
@@ -954,13 +864,13 @@ class MeshRenderer(object):
             results.append(frame)
         return results
 
-    def update_optimized_texture(self):
+    def _update_optimized_texture(self):
         request_update = False
         for material in self.material_idx_to_material_instance_mapping:
+            current_material = self.material_idx_to_material_instance_mapping[material]
             if (
-                isinstance(self.material_idx_to_material_instance_mapping[material], ProceduralMaterial)
-                and self.material_idx_to_material_instance_mapping[material].request_update
-            ):
+                isinstance(current_material, ProceduralMaterial) or isinstance(current_material, RandomizedMaterial)
+            ) and current_material.request_update:
                 request_update = True
                 self.material_idx_to_material_instance_mapping[material].request_update = False
 
@@ -973,7 +883,7 @@ class MeshRenderer(object):
         """
         A function to render all the instances in the renderer and read the output from framebuffer.
 
-        :param modes: a tuple consisting of a subset of ('rgb', 'normal', 'seg', '3d', 'scene_flow', 'optical_flow').
+        :param modes: a tuple consisting of a subset of ('rgb', 'normal', 'seg', '3d', 'scene_flow', 'optical_flow')
         :param hidden: hidden instances to skip. When rendering from a robot's perspective, it's own body can be hidden
         :param return_buffer: whether to return the frame buffers as numpy arrays
         :param render_shadow_pass: whether to render shadow
@@ -983,17 +893,25 @@ class MeshRenderer(object):
         if self.optimized and not self.optimization_process_executed:
             self.optimize_vertex_and_texture()
         if self.optimized:
-            self.update_optimized_texture()
+            self._update_optimized_texture()
+
+        # hide the objects that specified in hidden for optimized renderer
+        # non-optimized renderer handles hidden objects in a different way
+        if self.optimized and len(hidden) > 0:
+            for i in hidden:
+                i.hidden = True
+            self.update_hidden_highlight_state(hidden)
 
         if "seg" in modes and self.rendering_settings.msaa:
-            logging.warning(
+            log.warning(
                 "Rendering segmentation masks with MSAA on may generate interpolation artifacts. "
                 "It is recommended to turn MSAA off when rendering segmentation."
             )
 
         render_shadow_pass = render_shadow_pass and "rgb" in modes
         need_flow_info = "optical_flow" in modes or "scene_flow" in modes
-        self.update_dynamic_positions(need_flow_info=need_flow_info)
+        if self.optimized:
+            self.update_dynamic_positions(need_flow_info=need_flow_info)
 
         if self.enable_shadow and render_shadow_pass:
             # shadow pass
@@ -1103,34 +1021,26 @@ class MeshRenderer(object):
 
         self.r.render_meshrenderer_post()
 
+        # unhide the hidden objects for future rendering steps
+        if self.optimized and len(hidden) > 0:
+            for i in hidden:
+                i.hidden = False
+            self.update_hidden_highlight_state(hidden)
+
         if self.msaa:
             self.r.blit_buffer(self.width, self.height, self.fbo_ms, self.fbo)
         if return_buffer:
-            return self.readbuffer(modes)
-
-    def render_companion_window(self):
-        """
-        Render companion window.
-        The viewer is responsible for calling this to update the window,
-        if cv2 is not being used for window display
-        """
-        self.r.render_companion_window_from_buffer(self.fbo)
-
-    def get_visual_objects(self):
-        """
-        Return visual objects
-        """
-        return self.visual_objects
+            return self._readbuffer(modes)
 
     def get_instances(self):
         """
-        Return instances
+        Return instances.
         """
         return self.instances
 
     def dump(self):
         """
-        Dump instance vertex and face information
+        Dump instance vertex and face information.
         """
         instances_vertices = []
         instances_faces = []
@@ -1146,23 +1056,9 @@ class MeshRenderer(object):
 
         return instances_vertices, instances_faces
 
-    def set_light_pos(self, light):
-        """
-        Set light position
-
-        :param light: light position
-        """
-        self.lightpos = light
-
-    def get_num_objects(self):
-        """
-        Return the number of objects
-        """
-        return len(self.objects)
-
     def set_pose(self, pose, idx):
         """
-        Set pose for a specific instance
+        Set pose for a specific instance.
 
         :param pose: instance pose
         :param idx: instance id
@@ -1176,13 +1072,13 @@ class MeshRenderer(object):
         """
         Clean everything, and release the openGL context.
         """
-        logging.debug("Releasing. {}".format(self.glstring))
+        log.debug("Releasing. {}".format(self.glstring))
         self.clean()
         self.r.release()
 
     def clean(self):
         """
-        Clean all the framebuffers, objects and instances
+        Clean all the framebuffers, objects and instances.
         """
         clean_list = [
             self.color_tex_rgb,
@@ -1240,6 +1136,7 @@ class MeshRenderer(object):
         self.faces = []  # GC should free things here
         self.visual_objects = []
         self.instances = []
+        self.update_instance_id_to_pb_id_map()
         self.vertex_data = []
         self.shapes = []
         save_path = os.path.join(igibson.ig_dataset_path, "tmp")
@@ -1269,7 +1166,7 @@ class MeshRenderer(object):
 
     def transform_pose(self, pose):
         """
-        Transform pose from world frame to camera frame
+        Transform pose from world frame to camera frame.
 
         :param pose: pose in world frame
         :return: pose in camera frame
@@ -1279,18 +1176,20 @@ class MeshRenderer(object):
         pose_cam = self.V.dot(pose_trans.T).dot(pose_rot).T
         return np.concatenate([mat2xyz(pose_cam), safemat2quat(pose_cam[:3, :3].T)])
 
-    def render_active_cameras(self, modes=("rgb")):
+    def render_active_cameras(self, modes=("rgb"), cache=True):
         """
         Render camera images for the active cameras. This is applicable for robosuite integration with iGibson,
-        where there are multiple cameras defined but only some are active (e.g., to switch between views with TAB)
+        where there are multiple cameras defined but only some are active (e.g., to switch between views with TAB).
 
         :return: a list of frames (number of modalities x number of robots)
         """
         frames = []
         hide_robot = self.rendering_settings.hide_robot
+        need_flow_info = "optical_flow" in modes or "scene_flow" in modes
+        has_set_camera = False
         for instance in self.instances:
-            if isinstance(instance, Robot):
-                for camera in instance.robot.cameras:
+            if isinstance(instance.ig_object, BaseRobot):
+                for camera in instance.ig_object.cameras:
                     if camera.is_active():
                         camera_pose = camera.get_pose()
                         camera_pos = camera_pose[:3]
@@ -1299,37 +1198,48 @@ class MeshRenderer(object):
                             :3, :3
                         ]
                         camera_view_dir = camera_ori_mat.dot(np.array([0, 0, -1]))  # Mujoco camera points in -z
-                        self.set_camera(camera_pos, camera_pos + camera_view_dir, [0, 0, 1])
+                        if need_flow_info and has_set_camera:
+                            raise ValueError("We only allow one robot in the scene when rendering optical/scene flow.")
+                        self.set_camera(
+                            camera_pos, camera_pos + camera_view_dir, [0, 0, 1], cache=need_flow_info and cache
+                        )
+                        has_set_camera = True
                         for item in self.render(modes=modes, hidden=[[], [instance]][hide_robot]):
                             frames.append(item)
         return frames
 
-    def render_robot_cameras(self, modes=("rgb")):
+    def render_robot_cameras(self, modes=("rgb"), cache=True):
         """
-        Render robot camera images
+        Render robot camera images.
+
+        :param modes: a tuple of modalities to render
+        :param cache: if cache is True, cache the robot pose for optical flow and scene flow calculation.
+        One simulation step can only have one rendering call with cache=True
 
         :return: a list of frames (number of modalities x number of robots)
         """
         frames = []
-        for instance in self.instances:
-            if isinstance(instance, Robot):
-                camera_pos = instance.robot.eyes.get_position()
-                orn = instance.robot.eyes.get_orientation()
-                mat = quat2rotmat(xyzw2wxyz(orn))[:3, :3]
-                view_direction = mat.dot(np.array([1, 0, 0]))
-                self.set_camera(camera_pos, camera_pos + view_direction, [0, 0, 1], cache=True)
-                hidden_instances = []
-                if self.rendering_settings.hide_robot:
-                    hidden_instances.append(instance)
-                for item in self.render(modes=modes, hidden=hidden_instances):
-                    frames.append(item)
+        need_flow_info = "optical_flow" in modes or "scene_flow" in modes
+        if need_flow_info and len(self.simulator.scene.robots) > 1:
+            raise ValueError("We only allow one robot in the scene when rendering optical/scene flow.")
 
-        # TODO: Fix this once BehaviorRobot is BaseRobot-compliant.
-        # Unfortunately since BehaviorRobot currently does not properly implement the BaseRobot interface, it is not
-        # added using import_robot and needs to be found & handled separately.
-        behavior_robots = (robot for robot in self.simulator.robots if isinstance(robot, BehaviorRobot))
-        for robot in behavior_robots:
-            frames.extend(robot.render_camera_image(modes=modes))
+        for robot in self.simulator.scene.robots:
+            frames.extend(self.render_single_robot_camera(robot, modes=modes, cache=cache))
+
+        return frames
+
+    def render_single_robot_camera(self, robot, modes=("rgb"), cache=True):
+        frames = []
+        hide_instances = robot.renderer_instances if self.rendering_settings.hide_robot else []
+        need_flow_info = "optical_flow" in modes or "scene_flow" in modes
+        camera_pos = robot.eyes.get_position()
+        orn = robot.eyes.get_orientation()
+        mat = quat2rotmat(xyzw2wxyz(orn))[:3, :3]
+        view_direction = mat.dot(np.array([1, 0, 0]))
+        up_direction = mat.dot(np.array([0, 0, 1]))
+        self.set_camera(camera_pos, camera_pos + view_direction, up_direction, cache=need_flow_info and cache)
+        for item in self.render(modes=modes, hidden=hide_instances):
+            frames.append(item)
 
         return frames
 
@@ -1342,8 +1252,8 @@ class MeshRenderer(object):
         """
         names = []
         for instance in self.instances:
-            if isinstance(instance, Robot):
-                for camera in instance.robot.cameras:
+            if isinstance(instance.ig_object, BaseRobot):
+                for camera in instance.ig_object.cameras:
                     if camera.is_active():
                         names.append(camera.camera_name)
         return names
@@ -1354,8 +1264,8 @@ class MeshRenderer(object):
         Applicable for integration with iGibson.
         """
         for instance in self.instances:
-            if isinstance(instance, Robot):
-                instance.robot.cameras[idx].switch()
+            if isinstance(instance.ig_object, BaseRobot):
+                instance.ig_object.cameras[idx].switch()
 
     def _is_camera_active(self, idx):
         """
@@ -1363,8 +1273,8 @@ class MeshRenderer(object):
         Applicable for integration with iGibson.
         """
         for instance in self.instances:
-            if isinstance(instance, Robot):
-                return instance.robot.cameras[idx].is_active()
+            if isinstance(instance.ig_object, BaseRobot):
+                return instance.ig_object.cameras[idx].is_active()
 
     def _get_camera_name(self, idx):
         """
@@ -1372,15 +1282,15 @@ class MeshRenderer(object):
         Applicable for integration with iGibson.
         """
         for instance in self.instances:
-            if isinstance(instance, Robot):
-                return instance.robot.cameras[idx].camera_name
+            if isinstance(instance.ig_object, BaseRobot):
+                return instance.ig_object.cameras[idx].camera_name
 
     def optimize_vertex_and_texture(self):
         """
-        Optimize vertex and texture for optimized renderer
+        Optimize vertex and texture for optimized renderer.
         """
-        # for tex_file in self.texture_files:
-        #     print("Texture: ", tex_file)
+        for tex_file in self.texture_files:
+            log.debug("Texture: %s", tex_file)
         # Set cutoff about 4096, otherwise we end up filling VRAM very quickly
         cutoff = 5000 * 5000
         shouldShrinkSmallTextures = True
@@ -1391,8 +1301,8 @@ class MeshRenderer(object):
         self.tex_id_1, self.tex_id_2, self.tex_id_layer_mapping = self.r.generateArrayTextures(
             texture_files, cutoff, shouldShrinkSmallTextures, smallTexSize, igibson.key_path
         )
-        print(self.tex_id_layer_mapping)
-        print(len(self.texture_files), self.texture_files)
+        log.debug(self.tex_id_layer_mapping)
+        log.debug(len(self.texture_files), self.texture_files)
         self.textures.append(self.tex_id_1)
         self.textures.append(self.tex_id_2)
 
@@ -1418,34 +1328,22 @@ class MeshRenderer(object):
         hidden_array = []
 
         for instance in self.instances:
-            if isinstance(instance, Instance):
-                ids = instance.object.VAO_ids
+            id_sum = 0
+            # Collect OR buffer indices over all visual objects in this group
+            temp_or_buffer_indices = []
+            for vo in instance.objects:
+                ids = vo.VAO_ids
                 or_buffer_idx_start = len(duplicate_vao_ids)
                 duplicate_vao_ids.extend(ids)
                 or_buffer_idx_end = len(duplicate_vao_ids)
-                # Store indices in the duplicate vao ids array, and hence the optimized rendering buffers, that this Instance will use
-                instance.or_buffer_indices = list(np.arange(or_buffer_idx_start, or_buffer_idx_end))
-                class_id_array.extend([float(instance.class_id) / MAX_CLASS_COUNT] * len(ids))
-                instance_id_array.extend([float(instance.id) / MAX_INSTANCE_COUNT] * len(ids))
-                pbr_data_array.extend([[float(instance.use_pbr), 1.0, 1.0, 1.0]] * len(ids))
-                hidden_array.extend([[float(instance.hidden), 1.0, 1.0, 1.0]] * len(ids))
-            elif isinstance(instance, InstanceGroup) or isinstance(instance, Robot):
-                id_sum = 0
-                # Collect OR buffer indices over all visual objects in this group
-                temp_or_buffer_indices = []
-                for vo in instance.objects:
-                    ids = vo.VAO_ids
-                    or_buffer_idx_start = len(duplicate_vao_ids)
-                    duplicate_vao_ids.extend(ids)
-                    or_buffer_idx_end = len(duplicate_vao_ids)
-                    # Store indices in the duplicate vao ids array, and hence the optimized rendering buffers, that this InstanceGroup will use
-                    temp_or_buffer_indices.extend(list(np.arange(or_buffer_idx_start, or_buffer_idx_end)))
-                    id_sum += len(ids)
-                instance.or_buffer_indices = list(temp_or_buffer_indices)
-                class_id_array.extend([float(instance.class_id) / MAX_CLASS_COUNT] * id_sum)
-                instance_id_array.extend([float(instance.id) / MAX_INSTANCE_COUNT] * id_sum)
-                pbr_data_array.extend([[float(instance.use_pbr), 1.0, 1.0, 1.0]] * id_sum)
-                hidden_array.extend([[float(instance.hidden), 1.0, 1.0, 1.0]] * id_sum)
+                # Store indices in the duplicate vao ids array, and hence the optimized rendering buffers, that this InstanceGroup will use
+                temp_or_buffer_indices.extend(list(np.arange(or_buffer_idx_start, or_buffer_idx_end)))
+                id_sum += len(ids)
+            instance.or_buffer_indices = list(temp_or_buffer_indices)
+            class_id_array.extend([float(instance.class_id) / MAX_CLASS_COUNT] * id_sum)
+            instance_id_array.extend([float(instance.id) / MAX_INSTANCE_COUNT] * id_sum)
+            pbr_data_array.extend([[float(instance.use_pbr), 1.0, 1.0, 1.0]] * id_sum)
+            hidden_array.extend([[float(instance.hidden), 1.0, 1.0, 1.0]] * id_sum)
 
         # Number of shapes in the OR buffer is equal to the number of duplicate vao_ids
         self.or_buffer_shape_num = len(duplicate_vao_ids)
@@ -1569,9 +1467,9 @@ class MeshRenderer(object):
         self.merged_uv_data = np.ascontiguousarray(np.concatenate(uv_data, axis=0), np.float32)
 
         merged_vertex_data = np.concatenate(self.vertex_data, axis=0)
-        print("Merged vertex data shape:")
-        print(merged_vertex_data.shape)
-        print("Enable pbr: {}".format(self.rendering_settings.enable_pbr))
+        log.debug("Merged vertex data shape:")
+        log.debug(merged_vertex_data.shape)
+        log.debug("Enable pbr: {}".format(self.rendering_settings.enable_pbr))
 
         if self.msaa:
             buffer = self.fbo_ms
@@ -1606,7 +1504,7 @@ class MeshRenderer(object):
 
     def update_optimized_texture_internal(self):
         """
-        Update the texture_id for optimized renderer
+        Update the texture_id for optimized renderer.
         """
         # Some of these may share visual data, but have unique transforms
         duplicate_vao_ids = []
@@ -1620,39 +1518,24 @@ class MeshRenderer(object):
         hidden_array = []
 
         for instance in self.instances:
-            if isinstance(instance, Instance):
-                ids = instance.object.VAO_ids
+            id_sum = 0
+            # Collect OR buffer indices over all visual objects in this group
+            temp_or_buffer_indices = []
+            for vo in instance.objects:
+                ids = vo.VAO_ids
                 or_buffer_idx_start = len(duplicate_vao_ids)
                 duplicate_vao_ids.extend(ids)
                 or_buffer_idx_end = len(duplicate_vao_ids)
-                # Store indices in the duplicate vao ids array, and hence the optimized rendering buffers, that this Instance will use
-                instance.or_buffer_indices = list(np.arange(or_buffer_idx_start, or_buffer_idx_end))
-                class_id_array.extend([float(instance.class_id) / MAX_CLASS_COUNT] * len(ids))
-                instance_id_array.extend([float(instance.id) / MAX_INSTANCE_COUNT] * len(ids))
-                pbr_data_array.extend([[float(instance.use_pbr), 1.0, 1.0, 1.0]] * len(ids))
-                hidden_array.extend([[float(instance.hidden), 1.0, 1.0, 1.0]] * len(ids))
-            elif isinstance(instance, InstanceGroup) or isinstance(instance, Robot):
-                id_sum = 0
-                # Collect OR buffer indices over all visual objects in this group
-                temp_or_buffer_indices = []
-                for vo in instance.objects:
-                    ids = vo.VAO_ids
-                    or_buffer_idx_start = len(duplicate_vao_ids)
-                    duplicate_vao_ids.extend(ids)
-                    or_buffer_idx_end = len(duplicate_vao_ids)
-                    # Store indices in the duplicate vao ids array, and hence the optimized rendering buffers, that this InstanceGroup will use
-                    temp_or_buffer_indices.extend(list(np.arange(or_buffer_idx_start, or_buffer_idx_end)))
-                    id_sum += len(ids)
-                instance.or_buffer_indices = list(temp_or_buffer_indices)
-                class_id_array.extend([float(instance.class_id) / MAX_CLASS_COUNT] * id_sum)
-                instance_id_array.extend([float(instance.id) / MAX_INSTANCE_COUNT] * id_sum)
-                pbr_data_array.extend([[float(instance.use_pbr), 1.0, 1.0, 1.0]] * id_sum)
-                hidden_array.extend([[float(instance.hidden), 1.0, 1.0, 1.0]] * id_sum)
+                # Store indices in the duplicate vao ids array, and hence the optimized rendering buffers, that this InstanceGroup will use
+                temp_or_buffer_indices.extend(list(np.arange(or_buffer_idx_start, or_buffer_idx_end)))
+                id_sum += len(ids)
+            instance.or_buffer_indices = list(temp_or_buffer_indices)
+            class_id_array.extend([float(instance.class_id) / MAX_CLASS_COUNT] * id_sum)
+            instance_id_array.extend([float(instance.id) / MAX_INSTANCE_COUNT] * id_sum)
+            pbr_data_array.extend([[float(instance.use_pbr), 1.0, 1.0, 1.0]] * id_sum)
+            hidden_array.extend([[float(instance.hidden), 1.0, 1.0, 1.0]] * id_sum)
 
         # Variables needed for multi draw elements call
-        index_ptr_offsets = []
-        index_counts = []
-        indices = []
         diffuse_color_array = []
         tex_num_array = []
         tex_layer_array = []
@@ -1763,12 +1646,12 @@ class MeshRenderer(object):
 
     def update_hidden_highlight_state(self, instances):
         """
-        Updates the hidden state of a list of instances
+        Update the hidden state of a list of instances.
         This function is called by instances and not every frame, since hiding is a very infrequent operation.
         """
 
         if not self.optimization_process_executed:
-            logging.warning("Trying to set hidden state before vertices are merged, converted to no-op")
+            log.debug("Trying to set hidden state before vertices are merged, converted to no-op")
             return
         for instance in instances:
             buf_idxs = instance.or_buffer_indices
@@ -1791,21 +1674,12 @@ class MeshRenderer(object):
         :param need_flow_info: whether flow information is required
         """
         for instance in self.instances:
-            # if instance.dynamic:
-            if isinstance(instance, Instance):
-                buf_idxs = instance.or_buffer_indices
-                # Continue if instance has no visual objects
-                if not buf_idxs:
-                    continue
-                self.trans_data[buf_idxs] = np.array(instance.pose_trans)
-                self.rot_data[buf_idxs] = np.array(instance.pose_rot)
-            elif isinstance(instance, InstanceGroup) or isinstance(instance, Robot):
-                buf_idxs = instance.or_buffer_indices
-                # Continue if instance has no visual objects
-                if not buf_idxs:
-                    continue
-                self.trans_data[buf_idxs] = np.array(instance.poses_trans)
-                self.rot_data[buf_idxs] = np.array(instance.poses_rot)
+            buf_idxs = instance.or_buffer_indices
+            # Continue if instance has no visual objects
+            if not buf_idxs:
+                continue
+            self.trans_data[buf_idxs] = np.array(instance.poses_trans)
+            self.rot_data[buf_idxs] = np.array(instance.poses_rot)
 
         if need_flow_info:
             # this part could be expensive
@@ -1827,7 +1701,7 @@ class MeshRenderer(object):
 
     def use_pbr(self, use_pbr, use_pbr_mapping):
         """
-        Apply PBR setting to every instance
+        Apply PBR setting to every instance.
 
         :param use_pbr: whether to use pbr
         :param use_pbr_mapping: whether to use pbr mapping
@@ -1838,7 +1712,7 @@ class MeshRenderer(object):
 
     def setup_lidar_param(self):
         """
-        Set up LiDAR params
+        Set up LiDAR params.
         """
         lidar_vertical_low = -15 / 180.0 * np.pi
         lidar_vertical_high = 15 / 180.0 * np.pi
@@ -1862,15 +1736,16 @@ class MeshRenderer(object):
         xx = xx.flatten()
         yy = yy.flatten()
 
-        x_samples = (np.tan(xx) / np.cos(yy) * self.height // 2 + self.height // 2).astype(np.int)
-        y_samples = (np.tan(yy) * self.height // 2 + self.height // 2).astype(np.int)
+        x_samples = (np.tan(xx) / np.cos(yy) * self.height // 2 + self.height // 2).astype(int)
+        y_samples = (np.tan(yy) * self.height // 2 + self.height // 2).astype(int)
 
         self.x_samples = x_samples.flatten()
         self.y_samples = y_samples.flatten()
 
     def get_lidar_from_depth(self):
         """
-        Get partial LiDAR readings from depth sensors with limited FOV
+        Get partial LiDAR readings from depth sensors with limited FOV.
+
         :return: partial LiDAR readings with limited FOV
         """
         lidar_readings = self.render(modes=("3d"))[0]
@@ -1882,18 +1757,20 @@ class MeshRenderer(object):
 
     def get_lidar_all(self, offset_with_camera=np.array([0, 0, 0])):
         """
-        Get complete LiDAR readings by patching together partial ones
+        Get complete LiDAR readings by patching together partial ones.
+
         :param offset_with_camera: optionally place the lidar scanner
-        with an offset to the camera
+            with an offset to the camera
         :return: complete 360 degree LiDAR readings
         """
         for instance in self.instances:
-            if isinstance(instance, Robot):
-                camera_pos = instance.robot.eyes.get_position() + offset_with_camera
-                orn = instance.robot.eyes.get_orientation()
+            if isinstance(instance.ig_object, BaseRobot):
+                camera_pos = instance.ig_object.eyes.get_position() + offset_with_camera
+                orn = instance.ig_object.eyes.get_orientation()
                 mat = quat2rotmat(xyzw2wxyz(orn))[:3, :3]
                 view_direction = mat.dot(np.array([1, 0, 0]))
-                self.set_camera(camera_pos, camera_pos + view_direction, [0, 0, 1])
+                up_direction = mat.dot(np.array([0, 0, 1]))
+                self.set_camera(camera_pos, camera_pos + view_direction, up_direction)
 
         original_fov = self.vertical_fov
         self.set_fov(90)
@@ -1931,25 +1808,35 @@ class MeshRenderer(object):
         """
         :param mode: simulator rendering mode, 'rgb' or '3d'
         :param use_robot_camera: use the camera pose from robot
-
         :return: List of sensor readings, normalized to [0.0, 1.0], ordered as [F, R, B, L, U, D] * n_cameras
         """
 
-        orig_fov = self.vertical_fov
-        self.set_fov(90)
-        org_V = np.copy(self.V)
+        # Cache the original fov and V to be restored later
+        original_fov = self.vertical_fov
+        original_V = np.copy(self.V)
 
+        # Set fov to be 90 degrees
+        self.set_fov(90)
+
+        # Compute initial_V that will be used to render in 6 directions, based on whether use_robot_camera is True
         if use_robot_camera:
             for instance in self.instances:
-                if isinstance(instance, Robot):
-                    camera_pos = instance.robot.eyes.get_position()
-                    orn = instance.robot.eyes.get_orientation()
+                if isinstance(instance.ig_object, BaseRobot):
+                    camera_pos = instance.ig_object.eyes.get_position()
+                    orn = instance.ig_object.eyes.get_orientation()
                     mat = quat2rotmat(xyzw2wxyz(orn))[:3, :3]
                     view_direction = mat.dot(np.array([1, 0, 0]))
-                    self.set_camera(camera_pos, camera_pos + view_direction, [0, 0, 1])
+                    up_direction = mat.dot(np.array([0, 0, 1]))
+                    self.set_camera(camera_pos, camera_pos + view_direction, up_direction)
+                    initial_V = np.copy(self.V)
+        else:
+            initial_V = original_V
 
         def render_cube():
+            # Store 6 frames in 6 directions
             frames = []
+
+            # Forward, backward, left, right
             r = np.array(
                 [
                     [
@@ -1971,30 +1858,45 @@ class MeshRenderer(object):
             # Up
             r_up = np.array([[1, 0, 0, 0], [0, 0, -1, 0], [0, -1, 0, 0], [0, 0, 0, 1]])
 
-            self.V = r_up.dot(org_V)
+            self.V = r_up.dot(initial_V)
             frames.append(self.render(modes=(mode))[0])
 
+            # Down
             r_down = np.array([[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1]])
 
-            # Down
-            self.V = r_down.dot(org_V)
+            self.V = r_down.dot(initial_V)
             frames.append(self.render(modes=(mode))[0])
 
             return frames
 
         frames = render_cube()
-        self.V = org_V
-        self.set_fov(orig_fov)
+
+        # Restore original fov and V
+        self.V = original_V
+        self.set_fov(original_fov)
+
         return frames
 
     def get_equi(self, mode="rgb", use_robot_camera=False):
         """
+        Generate panorama images
         :param mode: simulator rendering mode, 'rgb' or '3d'
         :param use_robot_camera: use the camera pose from robot
         :return: List of sensor readings, normalized to [0.0, 1.0], ordered as [F, R, B, L, U, D]
         """
         frames = self.get_cube(mode=mode, use_robot_camera=use_robot_camera)
         frames = [frames[0], frames[1][:, ::-1, :], frames[2][:, ::-1, :], frames[3], frames[4], frames[5]]
-        equi = py360convert.c2e(cubemap=frames, h=frames[0].shape[0], w=frames[0].shape[0] * 2, cube_format="list")
+        try:
+            equi = py360convert.c2e(cubemap=frames, h=frames[0].shape[0], w=frames[0].shape[0] * 2, cube_format="list")
+        except AssertionError:
+            raise ValueError("Something went wrong during getting cubemap. Is the image size not a square?")
 
         return equi
+
+    def update_instance_id_to_pb_id_map(self):
+        self.instance_id_to_pb_id = np.full((MAX_INSTANCE_COUNT,), -1)
+        for inst in self.instances:
+            self.instance_id_to_pb_id[inst.id] = inst.pybullet_uuid if inst.pybullet_uuid is not None else -1
+
+    def get_pb_ids_for_instance_ids(self, instance_ids):
+        return self.instance_id_to_pb_id[instance_ids.astype(int)]

@@ -18,6 +18,7 @@ from igibson.objects.stateful_object import StatefulObject
 from igibson.objects.visual_marker import VisualMarker
 from igibson.render.mesh_renderer.instances import Instance, InstanceGroup
 from igibson.render.mesh_renderer.mesh_renderer_cpu import MeshRenderer
+from igibson.render.mesh_renderer.mesh_renderer_pyrender import MeshRendererPyRender
 from igibson.render.mesh_renderer.mesh_renderer_settings import MeshRendererSettings
 from igibson.render.mesh_renderer.mesh_renderer_tensor import MeshRendererG2G
 from igibson.render.mesh_renderer.mesh_renderer_vr import MeshRendererVR, VrSettings
@@ -228,7 +229,7 @@ class Simulator:
                 rendering_settings=self.rendering_settings, vr_settings=self.vr_settings, simulator=self
             )
         else:
-            self.renderer = MeshRenderer(
+            self.renderer = MeshRendererPyRender(
                 width=self.image_width,
                 height=self.image_height,
                 vertical_fov=self.vertical_fov,
