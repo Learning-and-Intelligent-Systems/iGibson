@@ -702,7 +702,7 @@ class Simulator:
                     tuple(rel_orn),
                 ) not in self.visual_objects.keys() or overwrite_material is not None:
                     # if the object has an overwrite material, always create a
-                    # new visual object even if the same visual shape exsits
+                    # new visual object even if the same visual shape exists
                     self.renderer.load_object(
                         filename,
                         transform_orn=rel_orn,

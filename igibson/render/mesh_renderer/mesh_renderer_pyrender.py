@@ -160,6 +160,7 @@ class MeshRendererPyRender(object):
         :param overwrite_material: whether to overwrite the default Material (usually with a RandomizedMaterial for material randomization)
         :return: VAO_ids
         """
+        import ipdb; ipdb.set_trace()
         mesh = pyrender.Mesh.from_trimesh(trimesh.load(obj_path))
         self.visual_objects.append(mesh)
         return len(self.visual_objects) - 1
