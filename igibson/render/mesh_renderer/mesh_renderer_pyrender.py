@@ -263,6 +263,9 @@ class MeshRendererPyRender(object):
         # return [np.concatenate([color, np.ones((self.height, self.width, 1))], axis=-1).astype(np.float32)]
         return [np.concatenate([np.ones((self.height, self.width, 1)), np.ones((self.height, self.width, 1))], axis=-1).astype(np.float32)]
 
+    def get_visual_objects(self):
+        return self.visual_objects
+
     def get_instances(self):
         """
         Return instances.
