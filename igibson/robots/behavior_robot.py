@@ -299,8 +299,8 @@ class BehaviorRobot(object):
         view_direction = mat.dot(np.array([1, 0, 0]))
         renderer.set_camera(eye_pos, eye_pos + view_direction, [0, 0, 1], cache=True)
         frames = []
-        for item in renderer.render(modes=modes):
-            frames.append(item)
+        # for item in renderer.render(modes=modes):
+        #     frames.append(item)
         return frames
 
     def _print_positions(self):
