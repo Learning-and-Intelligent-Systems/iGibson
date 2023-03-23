@@ -1847,7 +1847,7 @@ class Simulator:
             p.resetSimulation(physicsClientId=self.cid)
             p.disconnect(self.cid)
             # print("PyBullet Logging Information******************")
-        self.renderer.release()
+        # self.renderer.release()
 
     def disconnect_pybullet(self):
         """
