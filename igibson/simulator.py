@@ -734,7 +734,7 @@ class Simulator:
             poses_trans=poses_trans,
             poses_rot=poses_rot,
             dynamic=True,
-            robot=None,
+            # robot=None,
             use_pbr=use_pbr,
             use_pbr_mapping=use_pbr_mapping,
             shadow_caster=shadow_caster,
