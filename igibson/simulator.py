@@ -545,94 +545,96 @@ class Simulator:
         :param physical_object: The reference to Object class
         """
 
-        # Load object in renderer, use visual shape and base_link frame
-        # not CoM frame
-        # Do not load URDFObject or ArticulatedObject with this function
-        if physical_object is not None and (
-            isinstance(physical_object, ArticulatedObject) or isinstance(physical_object, URDFObject)
-        ):
-            raise ValueError("loading articulated object with load_object_in_renderer function")
+        pass
 
-        for shape in p.getVisualShapeData(object_pb_id):
-            id, link_id, type, dimensions, filename, rel_pos, rel_orn, color = shape[:8]
-            dynamics_info = p.getDynamicsInfo(id, link_id)
-            inertial_pos, inertial_orn = dynamics_info[3], dynamics_info[4]
-            rel_pos, rel_orn = p.multiplyTransforms(*p.invertTransform(inertial_pos, inertial_orn), rel_pos, rel_orn)
-            # visual meshes frame are transformed from the urdfLinkFrame as origin to comLinkFrame as origin
-            visual_object = None
-            if type == p.GEOM_MESH:
-                filename = filename.decode("utf-8")
-                if (filename, tuple(dimensions), tuple(rel_pos), tuple(rel_orn)) not in self.visual_objects.keys():
-                    self.renderer.load_object(
-                        filename,
-                        transform_orn=rel_orn,
-                        transform_pos=rel_pos,
-                        input_kd=color[:3],
-                        scale=np.array(dimensions),
-                        texture_scale=texture_scale,
-                        load_texture=load_texture,
-                    )
-                    self.visual_objects[(filename, tuple(dimensions), tuple(rel_pos), tuple(rel_orn))] = (
-                        len(self.renderer.visual_objects) - 1
-                    )
-                visual_object = self.visual_objects[(filename, tuple(dimensions), tuple(rel_pos), tuple(rel_orn))]
-            elif type == p.GEOM_SPHERE:
-                filename = os.path.join(igibson.assets_path, "models/mjcf_primitives/sphere8.obj")
-                self.renderer.load_object(
-                    filename,
-                    transform_orn=rel_orn,
-                    transform_pos=rel_pos,
-                    input_kd=color[:3],
-                    scale=[dimensions[0] / 0.5, dimensions[0] / 0.5, dimensions[0] / 0.5],
-                )
-                visual_object = len(self.renderer.get_visual_objects()) - 1
-            elif type == p.GEOM_CAPSULE or type == p.GEOM_CYLINDER:
-                filename = os.path.join(igibson.assets_path, "models/mjcf_primitives/cube.obj")
-                self.renderer.load_object(
-                    filename,
-                    transform_orn=rel_orn,
-                    transform_pos=rel_pos,
-                    input_kd=color[:3],
-                    scale=[dimensions[1] / 0.5, dimensions[1] / 0.5, dimensions[0]],
-                )
-                visual_object = len(self.renderer.get_visual_objects()) - 1
-            elif type == p.GEOM_BOX:
-                filename = os.path.join(igibson.assets_path, "models/mjcf_primitives/cube.obj")
-                self.renderer.load_object(
-                    filename,
-                    transform_orn=rel_orn,
-                    transform_pos=rel_pos,
-                    input_kd=color[:3],
-                    scale=np.array(dimensions),
-                )
-                visual_object = len(self.renderer.visual_objects) - 1
-            elif type == p.GEOM_PLANE:
-                # By default, we add an additional floor surface to "smooth out" that of the original mesh.
-                # Normally you don't need to render this additionally added floor surface.
-                # However, if you do want to render it for some reason, you can set render_floor_plane to be True.
-                if render_floor_plane:
-                    filename = os.path.join(igibson.assets_path, "models/mjcf_primitives/cube.obj")
-                    self.renderer.load_object(
-                        filename,
-                        transform_orn=rel_orn,
-                        transform_pos=rel_pos,
-                        input_kd=color[:3],
-                        scale=[100, 100, 0.01],
-                    )
-                    visual_object = len(self.renderer.visual_objects) - 1
-            if visual_object is not None:
-                self.renderer.add_instance(
-                    visual_object,
-                    pybullet_uuid=object_pb_id,
-                    class_id=class_id,
-                    dynamic=True,
-                    softbody=softbody,
-                    use_pbr=use_pbr,
-                    use_pbr_mapping=use_pbr_mapping,
-                    shadow_caster=shadow_caster,
-                )
-                if physical_object is not None:
-                    physical_object.renderer_instances.append(self.renderer.instances[-1])
+        # # Load object in renderer, use visual shape and base_link frame
+        # # not CoM frame
+        # # Do not load URDFObject or ArticulatedObject with this function
+        # if physical_object is not None and (
+        #     isinstance(physical_object, ArticulatedObject) or isinstance(physical_object, URDFObject)
+        # ):
+        #     raise ValueError("loading articulated object with load_object_in_renderer function")
+
+        # for shape in p.getVisualShapeData(object_pb_id):
+        #     id, link_id, type, dimensions, filename, rel_pos, rel_orn, color = shape[:8]
+        #     dynamics_info = p.getDynamicsInfo(id, link_id)
+        #     inertial_pos, inertial_orn = dynamics_info[3], dynamics_info[4]
+        #     rel_pos, rel_orn = p.multiplyTransforms(*p.invertTransform(inertial_pos, inertial_orn), rel_pos, rel_orn)
+        #     # visual meshes frame are transformed from the urdfLinkFrame as origin to comLinkFrame as origin
+        #     visual_object = None
+        #     if type == p.GEOM_MESH:
+        #         filename = filename.decode("utf-8")
+        #         if (filename, tuple(dimensions), tuple(rel_pos), tuple(rel_orn)) not in self.visual_objects.keys():
+        #             self.renderer.load_object(
+        #                 filename,
+        #                 transform_orn=rel_orn,
+        #                 transform_pos=rel_pos,
+        #                 input_kd=color[:3],
+        #                 scale=np.array(dimensions),
+        #                 texture_scale=texture_scale,
+        #                 load_texture=load_texture,
+        #             )
+        #             self.visual_objects[(filename, tuple(dimensions), tuple(rel_pos), tuple(rel_orn))] = (
+        #                 len(self.renderer.visual_objects) - 1
+        #             )
+        #         visual_object = self.visual_objects[(filename, tuple(dimensions), tuple(rel_pos), tuple(rel_orn))]
+        #     elif type == p.GEOM_SPHERE:
+        #         filename = os.path.join(igibson.assets_path, "models/mjcf_primitives/sphere8.obj")
+        #         self.renderer.load_object(
+        #             filename,
+        #             transform_orn=rel_orn,
+        #             transform_pos=rel_pos,
+        #             input_kd=color[:3],
+        #             scale=[dimensions[0] / 0.5, dimensions[0] / 0.5, dimensions[0] / 0.5],
+        #         )
+        #         visual_object = len(self.renderer.get_visual_objects()) - 1
+        #     elif type == p.GEOM_CAPSULE or type == p.GEOM_CYLINDER:
+        #         filename = os.path.join(igibson.assets_path, "models/mjcf_primitives/cube.obj")
+        #         self.renderer.load_object(
+        #             filename,
+        #             transform_orn=rel_orn,
+        #             transform_pos=rel_pos,
+        #             input_kd=color[:3],
+        #             scale=[dimensions[1] / 0.5, dimensions[1] / 0.5, dimensions[0]],
+        #         )
+        #         visual_object = len(self.renderer.get_visual_objects()) - 1
+        #     elif type == p.GEOM_BOX:
+        #         filename = os.path.join(igibson.assets_path, "models/mjcf_primitives/cube.obj")
+        #         self.renderer.load_object(
+        #             filename,
+        #             transform_orn=rel_orn,
+        #             transform_pos=rel_pos,
+        #             input_kd=color[:3],
+        #             scale=np.array(dimensions),
+        #         )
+        #         visual_object = len(self.renderer.visual_objects) - 1
+        #     elif type == p.GEOM_PLANE:
+        #         # By default, we add an additional floor surface to "smooth out" that of the original mesh.
+        #         # Normally you don't need to render this additionally added floor surface.
+        #         # However, if you do want to render it for some reason, you can set render_floor_plane to be True.
+        #         if render_floor_plane:
+        #             filename = os.path.join(igibson.assets_path, "models/mjcf_primitives/cube.obj")
+        #             self.renderer.load_object(
+        #                 filename,
+        #                 transform_orn=rel_orn,
+        #                 transform_pos=rel_pos,
+        #                 input_kd=color[:3],
+        #                 scale=[100, 100, 0.01],
+        #             )
+        #             visual_object = len(self.renderer.visual_objects) - 1
+        #     if visual_object is not None:
+        #         self.renderer.add_instance(
+        #             visual_object,
+        #             pybullet_uuid=object_pb_id,
+        #             class_id=class_id,
+        #             dynamic=True,
+        #             softbody=softbody,
+        #             use_pbr=use_pbr,
+        #             use_pbr_mapping=use_pbr_mapping,
+        #             shadow_caster=shadow_caster,
+        #         )
+        #         if physical_object is not None:
+        #             physical_object.renderer_instances.append(self.renderer.instances[-1])
 
     @load_without_pybullet_vis
     def load_articulated_object_in_renderer(
