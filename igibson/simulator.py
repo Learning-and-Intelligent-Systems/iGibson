@@ -17,11 +17,8 @@ from igibson.objects.particles import Particle, ParticleSystem
 from igibson.objects.stateful_object import StatefulObject
 from igibson.objects.visual_marker import VisualMarker
 from igibson.render.mesh_renderer.instances import Instance, InstanceGroup
-from igibson.render.mesh_renderer.mesh_renderer_cpu import MeshRenderer
-from igibson.render.mesh_renderer.mesh_renderer_pyrender import MeshRendererPyRender
 from igibson.render.mesh_renderer.mesh_renderer_settings import MeshRendererSettings
-from igibson.render.mesh_renderer.mesh_renderer_tensor import MeshRendererG2G
-from igibson.render.mesh_renderer.mesh_renderer_vr import MeshRendererVR, VrSettings
+from igibson.render.mesh_renderer.mesh_renderer_vr import VrSettings
 from igibson.render.viewer import Viewer, ViewerSimple, ViewerVR
 from igibson.robots.behavior_robot import BehaviorRobot
 from igibson.robots.robot_base import BaseRobot

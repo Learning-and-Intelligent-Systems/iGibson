@@ -2,8 +2,6 @@ import logging
 import platform
 
 import numpy as np
-import pyrender
-import trimesh
 from PIL import Image
 
 from igibson.render.mesh_renderer.mesh_renderer_settings import MeshRendererSettings
