@@ -201,13 +201,15 @@ class BehaviorEnv(iGibsonEnv):
             )
             self.observation_space = gym.spaces.Dict(self.observation_space.spaces)
 
-    def step(self, action):
+    def step(self, action, save_video=False, task_name=""):
         """
         Apply robot's action.
         Returns the next state, reward, done and info,
         following OpenAI Gym's convention
 
         :param action: robot actions
+        :param save_video: bool; unused on this branch
+        :param task_name: string corresponding to task name; unused on this branch
         :return: state: next observation
         :return: reward: reward of this time step
         :return: done: whether the episode is terminated
