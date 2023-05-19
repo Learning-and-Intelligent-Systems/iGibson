@@ -1136,9 +1136,11 @@ class Simulator:
         self.frame_count += 1
         self.frame_end_time = time.perf_counter()
 
-    def step(self, print_stats=False):
+    def step(self, print_stats=False, save_video=False):
         """
-        Step the simulation at self.render_timestep and update positions in renderer
+        Step the simulation at self.render_timestep and update positions in renderer.
+        Note that the step_video argument is not used (since we have no renderer on
+        this branch!).
         """
         # Call separate step function for VR
         if self.can_access_vr_context:
