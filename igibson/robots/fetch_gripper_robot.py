@@ -1,3 +1,5 @@
+import logging
+
 import gym
 import numpy as np
 import pybullet as p
@@ -67,6 +69,7 @@ class FetchGripper(LocomotorRobot):
         self.arm_joint_ids = np.array([3, 12, 13, 14, 15, 16, 17, 18])
         self.gripper_joint_ids = np.array([19, 20, 21])
         self.gripper_finger_joint_ids = np.array([20, 21])
+        self.grasp_point_joint_id = 22
 
         self.wheel_joint_action_idx = [i for i, idn in enumerate(self.joint_ids) if idn in self.wheel_joint_ids]
         self.head_joint_action_idx = [i for i, idn in enumerate(self.joint_ids) if idn in self.head_joint_ids]
@@ -96,6 +99,8 @@ class FetchGripper(LocomotorRobot):
         self.should_freeze_joints = False
         self.release_counter = None
         self.freeze_vals = {}
+
+        self.rng = np.random.default_rng(0)
 
     @property
     def joint_ids(self):
@@ -514,7 +519,21 @@ class FetchGripper(LocomotorRobot):
 
         candidates = list(set_1_contacts.intersection(set_2_contacts))
         if len(candidates) == 0:
-            return None
+            # Step 1.1 - find all objects in contact with grasp point
+            grasp_point_contacts = p.getContactPoints(
+                bodyA=self.get_body_id(), linkIndexA=self.grasp_point_joint_id
+            )
+            contact_dict = {}
+            set_contacts = set()
+            for contact in grasp_point_contacts:
+                set_contacts.add(contact[2])
+                if contact[2] not in contact_dict:
+                    contact_dict[contact[2]] = []
+                contact_dict[contact[2]].append({"contact_position": contact[5], "target_link": contact[4]})
+
+            candidates = list(set_contacts)
+            if len(candidates) == 0:
+                return None
 
         # Step 2, check if contact with target is inside bounding box
         # Might be easier to check if contact normal points towards or away from center of gripper from
@@ -820,17 +839,17 @@ class FetchGripper(LocomotorRobot):
             lift_joint = current_joint_position[2]
         current_joint_position[2] = self.untucked_default_joints[2]
         self.set_joint_positions(current_joint_position)
-        for i in range(MAX_IK_ATTEMPTS):
-            base_link_to_world = p.invertTransform(*get_link_pose(
-                self.robot_ids[0],
-                self.parts["torso_lift_link"].body_part_index))
-            base_link_to_target = p.multiplyTransforms(base_link_to_world[0],
-                                                       base_link_to_world[1],
-                                                       target_world_to_wrist[0],
-                                                       target_world_to_wrist[1])
-            rel_pos = base_link_to_target[0]
-            rel_orn = p.getMatrixFromQuaternion(base_link_to_target[1])
-            pfree = np.random.rand() * self.joint_range[5] + self.lower_joint_limits[5]
+        base_link_to_world = p.invertTransform(*get_link_pose(
+            self.robot_ids[0],
+            self.parts["torso_lift_link"].body_part_index))
+        base_link_to_target = p.multiplyTransforms(base_link_to_world[0],
+                                                   base_link_to_world[1],
+                                                   target_world_to_wrist[0],
+                                                   target_world_to_wrist[1])
+        rel_pos = base_link_to_target[0]
+        rel_orn = p.getMatrixFromQuaternion(base_link_to_target[1])
+        for _ in range(MAX_IK_ATTEMPTS):
+            pfree = self.rng.random() * self.joint_range[5] + self.lower_joint_limits[5]
             joint_pos_ik = ik.inverse(list(rel_pos), list(rel_orn), pfree)
             if len(joint_pos_ik) > 0:
                 break
@@ -877,5 +896,25 @@ class FetchGripper(LocomotorRobot):
         return False
 
     def set_eef_position(self, pos):
-        raise NotImplementedError("Current IKFast solver does not support position-only IK")
+        # raise NotImplementedError("Current IKFast solver does not support position-only IK")
         # self.set_eef_position_orientation(pos, None)
+
+        # I'll do this via sampling and see if it is plausible
+        MAX_ORN_SAMPLES = 100
+
+        def uniformly_sample_quaternion():
+            # Following https://msl.cs.uiuc.edu/planning/bookbig.pdf page 198
+            # S. M. LaValle. Planning Algorithms (2006); Section 5.2.2, p. 198
+            u1, u2, u3 = self.rng.random(3)
+            return (np.sqrt(1 - u1) * np.sin(2 * np.pi * u2),
+                    np.sqrt(1 - u1) * np.cos(2 * np.pi * u2),
+                    np.sqrt(u1) * np.sin(2 * np.pi * u3),
+                    np.sqrt(u1) * np.cos(2 * np.pi * u3))
+
+        for i in range(MAX_ORN_SAMPLES):
+            orn = uniformly_sample_quaternion()
+            if self.set_eef_position_orientation(pos, orn):
+                logging.info(f"Successful position only IK after {i} orientation samples")
+                return True, orn
+        logging.info(f"Failed position only IK after {i} orientation samples")
+        return False, orn
