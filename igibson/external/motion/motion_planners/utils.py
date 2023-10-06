@@ -8,9 +8,9 @@ import time
 
 INF = float('inf')
 
-RRT_ITERATIONS = 500 #100
-RRT_RESTARTS = 10 #2
-RRT_SMOOTHING = 20
+RRT_ITERATIONS = 100000 #100
+RRT_RESTARTS = 2000 #2
+RRT_SMOOTHING = 1
 
 
 def irange(start, stop=None, step=1):  # np.arange

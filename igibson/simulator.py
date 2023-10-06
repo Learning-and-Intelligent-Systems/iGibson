@@ -167,7 +167,7 @@ class Simulator:
         # Set of categories that can be grasped by assisted grasping
         self.assist_grasp_category_allow_list = set()
         self.gen_assisted_grasping_categories()
-        self.assist_grasp_mass_thresh = 10.0
+        self.assist_grasp_mass_thresh = 100.0
 
         self.object_state_types = get_states_by_dependency_order()
 

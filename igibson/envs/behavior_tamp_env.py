@@ -339,7 +339,7 @@ class BehaviorTAMPEnv(BehaviorEnv):
                         lo, hi = obj.states[object_states.AABB].get_value()
                         volume = get_aabb_volume(lo, hi)
                         if (
-                            volume < 0.2 * 0.2 * 0.2 and not obj.main_body_is_fixed
+                            not obj.main_body_is_fixed # volume < 0.2 * 0.2 * 0.2 and not obj.main_body_is_fixed
                         ):  # say we can only grasp small objects
                             if (
                                 np.linalg.norm(np.array(obj.get_position()) - np.array(self.robots[0].get_position()))
