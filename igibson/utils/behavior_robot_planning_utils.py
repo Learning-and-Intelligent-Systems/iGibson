@@ -86,6 +86,22 @@ def plan_base_motion_br(
         # TODO: update this function
         # set_base_values(body, q)
         robot.set_position_orientation([q[0], q[1], robot.initial_z_offset], p.getQuaternionFromEuler([0, 0, q[2]]))
+        # from igibson.objects.articulated_object import URDFObject
+        # for obj in obstacles:
+        #     if isinstance(obj, URDFObject):
+        #         for obs in obj.body_ids:
+        #             for body_id in body_ids:
+        #                 if pairwise_collision(body_id, obs, max_distance=max_distance):
+        #                     print(obj.name, body_id)
+        #                     if "bed" in obj.name:
+        #                         return True
+        # return False
+        print("obstacles:", obstacles)
+        for obs in obstacles:
+            for body_id in body_ids:
+                if pairwise_collision(body_id, obs, max_distance=max_distance):
+                    print("collision", obs, body_id)
+
         return any(
             pairwise_collision(body_id, obs, max_distance=max_distance) for obs in obstacles for body_id in body_ids
         )
@@ -93,14 +109,15 @@ def plan_base_motion_br(
     pos = robot.get_position()
     yaw = p.getEulerFromQuaternion(robot.get_orientation())[2]
     start_conf = [pos[0], pos[1], yaw]
-    if collision_fn(start_conf):
-        print("Warning: initial configuration is in collision")
-        return None
+    # if collision_fn(start_conf):
+    #     print("Warning: initial configuration is in collision")
+    #     return None
     if collision_fn(end_conf):
         print("Warning: end configuration is in collision")
         return None
     if direct:
         return direct_path(start_conf, end_conf, extend_fn, collision_fn)
+    print("Running BiRRT")
     return birrt(start_conf, end_conf, distance_fn, sample_fn, extend_fn, collision_fn, **kwargs)
 
 
@@ -195,6 +212,8 @@ def plan_hand_motion_br(
                 )
             )
 
+        body_ids = [robot.parts["right_hand"].body_id]
+
         collision = any(
             pairwise_collision(robot.parts["right_hand"].body_id, obs, max_distance=max_distance) for obs in obstacles
         )
@@ -204,10 +223,25 @@ def plan_hand_motion_br(
                 obj_in_hand_body_id = obj_in_hand.body_id[0]
             else:
                 obj_in_hand_body_id = obj_in_hand.body_id
+            body_ids.append(obj_in_hand_body_id)
             collision = collision or any(
                 pairwise_collision(obj_in_hand_body_id, obs, max_distance=max_distance) for obs in obstacles if obs != 0
             )
 
+        # robot.set_position_orientation([q[0], q[1], robot.initial_z_offset], p.getQuaternionFromEuler([0, 0, q[2]]))
+        # from igibson.objects.articulated_object import URDFObject
+        # for obj in obstacles:
+        #     if isinstance(obj, URDFObject):
+        #         for obs in obj.body_ids:
+        #             for body_id in body_ids:
+        #                 if pairwise_collision(body_id, obs, max_distance=max_distance):
+        #                     print(obj.name, body_id)
+        # return False
+        print("obstacles:", obstacles)
+        for obs in obstacles:
+            for body_id in body_ids:
+                if pairwise_collision(body_id, obs, max_distance=max_distance):
+                    print("collision", obs, body_id)
         return collision
 
     if collision_fn(start_conf):
@@ -218,6 +252,7 @@ def plan_hand_motion_br(
         return None
     if direct:
         return direct_path(start_conf, end_conf, extend_fn, collision_fn)
+    print("Running Hand BiRRT")
     return birrt(start_conf, end_conf, distance_fn, sample_fn, extend_fn, collision_fn, **kwargs)
 
 
