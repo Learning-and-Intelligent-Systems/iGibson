@@ -1,8 +1,8 @@
 import logging
 import os
-import random
 import time
 from os.path import isfile, join
+from moviepy.editor import VideoFileClip, CompositeVideoClip
 
 import cv2
 import numpy as np
@@ -97,9 +97,6 @@ class ViewerSimple:
                     )
                     self.frame_idx += 1
         cv2.waitKey(1)
-
-    def make_video(self, task_name=""):
-        convert_frames_to_video(self.video_folder+"/", task_name + "_first_person_pov.mp4", 25.0)
 
 class Viewer:
     def __init__(
@@ -835,8 +832,18 @@ class Viewer:
         self.initialize = False
 
     def make_video(self, task_name=""):
-        convert_frames_to_video(self.robotview_folder+"/", task_name + "_first_person_pov.mp4", 25.0)
-        convert_frames_to_video(self.externalview_folder+"/", task_name + "_third_person_pov.mp4", 25.0)
+        first_person_video_filename = task_name + "_first_person_pov.mp4"
+        third_person_video_filename = task_name + "_third_person_pov.mp4"
+        # First, make and save first and third person POV videos
+        # respectively.
+        convert_frames_to_video(self.robotview_folder+"/", first_person_video_filename, 25.0)
+        convert_frames_to_video(self.externalview_folder+"/", third_person_video_filename, 25.0)
+        # Then, load these and combine them together.
+        first_person_video = VideoFileClip(first_person_video_filename)
+        third_person_video = VideoFileClip(third_person_video_filename)
+        resized_first_person_video = first_person_video.resize(0.25)
+        final_video = CompositeVideoClip([third_person_video,resized_first_person_video.set_position(("right","top"))])
+        final_video.write_videofile(task_name + "_combined_view.mp4")        
 
 def convert_frames_to_video(pathIn,pathOut,fps):
     """Makes mp4 video from frames collected from recording."""
