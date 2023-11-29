@@ -433,12 +433,12 @@ class WaterStream(ParticleSystem):
         # First load the particle normally.
         body_id = super(WaterStream, self)._load_particle(particle)
 
-        # Set renderer instance settings on the particles.
-        instances = self._simulator.renderer.get_instances()
-        for instance in instances:
-            if instance.pybullet_uuid == body_id:
-                instance.roughness = 0
-                instance.metalness = 1
+        # # Set renderer instance settings on the particles.
+        # instances = self._simulator.renderer.get_instances()
+        # for instance in instances:
+        #     if instance.pybullet_uuid == body_id:
+        #         instance.roughness = 0
+        #         instance.metalness = 1
 
         return body_id
 

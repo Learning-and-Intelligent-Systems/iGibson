@@ -159,25 +159,25 @@ class VisionSensor(BaseSensor):
         raw_vision_obs = {mode: value for mode, value in zip(self.raw_modalities, raw_vision_obs)}
 
         vision_obs = OrderedDict()
-        if "rgb" in self.modalities:
-            vision_obs["rgb"] = self.get_rgb(raw_vision_obs)
-        if "rgb_filled" in self.modalities:
-            vision_obs["rgb_filled"] = self.get_rgb_filled(raw_vision_obs)
-        if "depth" in self.modalities:
-            vision_obs["depth"] = self.get_depth(raw_vision_obs)
-        if "pc" in self.modalities:
-            vision_obs["pc"] = self.get_pc(raw_vision_obs)
-        if "optical_flow" in self.modalities:
-            vision_obs["optical_flow"] = self.get_optical_flow(raw_vision_obs)
-        if "scene_flow" in self.modalities:
-            vision_obs["scene_flow"] = self.get_scene_flow(raw_vision_obs)
-        if "normal" in self.modalities:
-            vision_obs["normal"] = self.get_normal(raw_vision_obs)
-        if "seg" in self.modalities:
-            vision_obs["seg"] = self.get_seg(raw_vision_obs)
-        if "ins_seg" in self.modalities:
-            vision_obs["ins_seg"] = self.get_ins_seg(raw_vision_obs)
-        if "highlight" in self.modalities:
-            vision_obs["highlight"] = self.get_highlight(raw_vision_obs)
+        # if "rgb" in self.modalities:
+        #     vision_obs["rgb"] = self.get_rgb(raw_vision_obs)
+        # if "rgb_filled" in self.modalities:
+        #     vision_obs["rgb_filled"] = self.get_rgb_filled(raw_vision_obs)
+        # if "depth" in self.modalities:
+        #     vision_obs["depth"] = self.get_depth(raw_vision_obs)
+        # if "pc" in self.modalities:
+        #     vision_obs["pc"] = self.get_pc(raw_vision_obs)
+        # if "optical_flow" in self.modalities:
+        #     vision_obs["optical_flow"] = self.get_optical_flow(raw_vision_obs)
+        # if "scene_flow" in self.modalities:
+        #     vision_obs["scene_flow"] = self.get_scene_flow(raw_vision_obs)
+        # if "normal" in self.modalities:
+        #     vision_obs["normal"] = self.get_normal(raw_vision_obs)
+        # if "seg" in self.modalities:
+        #     vision_obs["seg"] = self.get_seg(raw_vision_obs)
+        # if "ins_seg" in self.modalities:
+        #     vision_obs["ins_seg"] = self.get_ins_seg(raw_vision_obs)
+        # if "highlight" in self.modalities:
+        #     vision_obs["highlight"] = self.get_highlight(raw_vision_obs)
 
         return vision_obs
