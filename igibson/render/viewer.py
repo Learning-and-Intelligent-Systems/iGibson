@@ -1,7 +1,8 @@
 import logging
 import os
-import random
 import time
+from os.path import isfile, join
+from moviepy.editor import VideoFileClip, CompositeVideoClip
 
 import cv2
 import numpy as np
@@ -22,7 +23,7 @@ class ViewerVR:
         self.frame_counter = 0
         self.frame_save_video_handler = None
 
-    def update(self):
+    def update(self, save_video=False, task_name=""):
         """
         Updates viewer.
         """
@@ -64,18 +65,38 @@ class ViewerSimple:
     ):
         self.renderer = renderer
         self.simulator = simulator
+        self.recording = False
+        self.task = ""
 
         cv2.namedWindow("RobotView")
         cv2.moveWindow("RobotView", 0, 0)
 
-    def update(self):
+    def update(self, save_video=False, task_name=""):
+        self.task = task_name
+        if save_video and not self.recording:
+            logging.info("Start recording*****************************")
+            # Current time string to use to save the temporal urdfs
+            timestr = time.strftime("%Y%m%d-%H%M%S") 
+            # Create the subfolder
+            self.video_folder = os.path.join(
+                os.getcwd() + "/video_frames", "{}_{}_{}".format(timestr, "robotview", task_name)
+            )
+            logging.info(self.video_folder)
+            os.makedirs(self.video_folder, exist_ok=True)
+            self.recording = True
+            self.frame_idx = 0
+        
         if not self.renderer is None:
             frames = self.renderer.render_robot_cameras(modes=("rgb"))
             if len(frames) > 0:
                 frame = cv2.cvtColor(np.concatenate(frames, axis=1), cv2.COLOR_RGB2BGR)
                 cv2.imshow("RobotView", frame)
+                if self.recording:
+                    cv2.imwrite(
+                    os.path.join(self.video_folder, "{:05d}.png".format(self.frame_idx)), (frame * 255).astype(np.uint8)
+                    )
+                    self.frame_idx += 1
         cv2.waitKey(1)
-
 
 class Viewer:
     def __init__(
@@ -126,6 +147,7 @@ class Viewer:
         self.recording = False  # Boolean if we are recording frames from the viewer
         self.pause_recording = False  # Flag to pause/resume recording
         self.video_folder = ""
+        self.task = ""
 
         # in case of robosuite viewer, we open only one window.
         # Later use the numpad to activate additional cameras
@@ -624,10 +646,11 @@ class Viewer:
             cv2.putText(frame, help_text, (10, 360), cv2.FONT_HERSHEY_SIMPLEX, 0.5, second_color, 1, cv2.LINE_AA)
         self.show_help -= 1
 
-    def update(self):
+    def update(self, save_video=False, task_name=""):
         """
         Update images of Viewer
         """
+        self.task = task_name
         camera_pose = np.array([self.px, self.py, self.pz])
         if self.renderer is not None:
             self.renderer.set_camera(camera_pose, camera_pose + self.view_direction, self.up)
@@ -729,19 +752,26 @@ class Viewer:
             exit()
 
         # Start/Stop recording. Stopping saves frames to files
-        elif q == ord("r"):
+        elif (q == ord("r") or save_video):
+            save_video = False
             if self.recording:
                 self.recording = False
                 self.pause_recording = False
             else:
                 logging.info("Start recording*****************************")
+                logging.info("Press 'r' to stop recording and 'p' to pause/resume recording.")
                 # Current time string to use to save the temporal urdfs
                 timestr = time.strftime("%Y%m%d-%H%M%S")
-                # Create the subfolder
-                self.video_folder = os.path.join(
-                    "/tmp", "{}_{}_{}".format(timestr, random.getrandbits(64), os.getpid())
+                self.robotview_folder = os.path.join(
+                    os.getcwd() + "/video_frames", "{}_{}_{}".format(timestr, "robotview", task_name)
                 )
-                os.makedirs(self.video_folder, exist_ok=True)
+                self.externalview_folder = os.path.join(
+                    os.getcwd() + "/video_frames", "{}_{}_{}".format(timestr, "externalview", task_name)
+                )
+                logging.info("robotview folder: " + self.robotview_folder)
+                logging.info("externalview folder: " + self.externalview_folder)
+                os.makedirs(self.robotview_folder, exist_ok=True)
+                os.makedirs(self.externalview_folder, exist_ok=True)
                 self.recording = True
                 self.frame_idx = 0
 
@@ -775,7 +805,7 @@ class Viewer:
 
         if self.recording and not self.pause_recording:
             cv2.imwrite(
-                os.path.join(self.video_folder, "{:05d}.png".format(self.frame_idx)), (frame * 255).astype(np.uint8)
+                os.path.join(self.externalview_folder, "{:05d}.png".format(self.frame_idx)), (frame * 255).astype(np.uint8)
             )
             self.frame_idx += 1
 
@@ -793,7 +823,52 @@ class Viewer:
                 if len(frames) > 0:
                     frame = cv2.cvtColor(np.concatenate(frames, axis=1), cv2.COLOR_RGB2BGR)
                     cv2.imshow("RobotView", frame)
+                    if self.recording:
+                        cv2.imwrite(
+                        os.path.join(self.robotview_folder, "{:05d}.png".format(self.frame_idx)), (frame * 255).astype(np.uint8)
+                        )
+                        self.frame_idx += 1
 
+        self.initialize = False
+
+    def make_video(self, task_name=""):
+        first_person_video_filename = task_name + "_first_person_pov.mp4"
+        third_person_video_filename = task_name + "_third_person_pov.mp4"
+        # First, make and save first and third person POV videos
+        # respectively.
+        convert_frames_to_video(self.robotview_folder+"/", first_person_video_filename, 25.0)
+        convert_frames_to_video(self.externalview_folder+"/", third_person_video_filename, 25.0)
+        # Then, load these and combine them together.
+        first_person_video = VideoFileClip(first_person_video_filename)
+        third_person_video = VideoFileClip(third_person_video_filename)
+        resized_first_person_video = first_person_video.resize(0.25)
+        final_video = CompositeVideoClip([third_person_video,resized_first_person_video.set_position(("right","top"))])
+        final_video.write_videofile(task_name + "_combined_view.mp4")        
+
+def convert_frames_to_video(pathIn,pathOut,fps):
+    """Makes mp4 video from frames collected from recording."""
+    frame_array = []
+    files = [f for f in os.listdir(pathIn) if isfile(join(pathIn, f))]
+    #for sorting the file names properly
+    files.sort(key = lambda x: int(x[-9:-4]))
+    img1_file = pathIn + files[0]
+    img1 = cv2.imread(img1_file)
+    height, width, layers = img1.shape
+    size = (width, height)
+
+    for i in range(len(files)):
+        filename=pathIn + files[i]
+        #reading each files
+        img = cv2.imread(filename)
+        height, width, layers = img.shape
+        size = (width,height)
+        #inserting the frames into an image array
+        frame_array.append(img)
+    out = cv2.VideoWriter(pathOut,cv2.VideoWriter_fourcc(*'MP4V'), fps, size)
+    for i in range(len(frame_array)):
+        # writing to a image array
+        out.write(frame_array[i])
+    out.release()
 
 if __name__ == "__main__":
     viewer = Viewer()

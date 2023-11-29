@@ -161,6 +161,7 @@ setup(
         "gitpython",
         "py360convert",
         "bddl",
+        "moviepy"
     ],
     ext_modules=[CMakeExtension("MeshRendererContext", sourcedir="igibson/render")],
     cmdclass=dict(build_ext=CMakeBuild),

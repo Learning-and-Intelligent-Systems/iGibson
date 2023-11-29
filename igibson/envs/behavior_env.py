@@ -38,7 +38,8 @@ class BehaviorEnv(iGibsonEnv):
         action_filter="mobile_manipulation",
         instance_id=0,
         episode_save_dir=None,
-        rng=None
+        rng=None,
+        num_viz_spheres=0
     ):
         """
         :param config_file: config_file path
@@ -85,6 +86,11 @@ class BehaviorEnv(iGibsonEnv):
             self.simulator.viewer.px = robot_init_pos[0]
             self.simulator.viewer.py = robot_init_pos[1]
             self.simulator.viewer.pz = robot_init_pos[2]
+
+        self.viz_spheres = []
+        for _ in range(num_viz_spheres):
+            self.viz_spheres.append(self.simulator.load_visual_sphere(radius=0.02, color=(1, 0, 0)))
+
 
         # Make sure different parallel environments will have different random seeds
         # np.random.seed(os.getpid())
@@ -201,7 +207,7 @@ class BehaviorEnv(iGibsonEnv):
             )
             self.observation_space = gym.spaces.Dict(self.observation_space.spaces)
 
-    def step(self, action):
+    def step(self, action, save_video=False, task_name=""):
         """
         Apply robot's action.
         Returns the next state, reward, done and info,
@@ -251,7 +257,7 @@ class BehaviorEnv(iGibsonEnv):
         self.robots[0].apply_action(new_action)
         if self.log_writer is not None:
             self.log_writer.process_frame()
-        self.simulator.step()
+        self.simulator.step(save_video=save_video, task_name=task_name)
 
         state = self.get_state()
         info = {}
