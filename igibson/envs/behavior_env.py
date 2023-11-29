@@ -38,7 +38,8 @@ class BehaviorEnv(iGibsonEnv):
         action_filter="mobile_manipulation",
         instance_id=0,
         episode_save_dir=None,
-        rng=None
+        rng=None,
+        num_viz_spheres=0
     ):
         """
         :param config_file: config_file path
@@ -85,6 +86,11 @@ class BehaviorEnv(iGibsonEnv):
             self.simulator.viewer.px = robot_init_pos[0]
             self.simulator.viewer.py = robot_init_pos[1]
             self.simulator.viewer.pz = robot_init_pos[2]
+
+        self.viz_spheres = []
+        for _ in range(num_viz_spheres):
+            self.viz_spheres.append(self.simulator.load_visual_sphere(radius=0.02, color=(1, 0, 0)))
+
 
         # Make sure different parallel environments will have different random seeds
         # np.random.seed(os.getpid())
