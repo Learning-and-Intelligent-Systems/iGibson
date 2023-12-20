@@ -175,7 +175,10 @@ class ProceduralMaterial(Material):
         else:
             requests = sorted(self.requests, key=lambda state: TEXTURE_CHANGE_PRIORITY[state])
             highest_priority_state = requests[-1]
-            texture_id = self.texture_ids[highest_priority_state]
+            if highest_priority_state in self.texture_ids:
+                texture_id = self.texture_ids[highest_priority_state]
+            else:
+                texture_id = self.default_texture_id
 
         # Request update if the texture_id doesn't match the current one
         if self.texture_id != texture_id:

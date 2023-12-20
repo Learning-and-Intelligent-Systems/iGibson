@@ -107,6 +107,22 @@ class FetchGripper(LocomotorRobot):
         return np.array([1, 2, 3, 4, 5, 12, 13, 14, 15, 16, 17, 18, 20, 21])
 
     @property
+    def manipulation_joints(self):
+        return np.array([2] + list(range(5, 12)))
+
+    @property
+    def revolute_joints(self):
+        return np.array([3, 4, 5, 6, 8, 10])
+
+    @property
+    def prismatic_joints(self):
+        return np.array([2, 12, 13])
+
+    @property
+    def continuous_joints(self):
+        return np.array([0, 1, 7, 9, 11])
+
+    @property
     def joint_damping(self):
         return np.array([get_joint_info(self.robot_ids[0], joint_id)[6] for joint_id in self.joint_ids])
 
@@ -364,13 +380,13 @@ class FetchGripper(LocomotorRobot):
         """
         Get end-effector position
         """
-        return self.parts["gripper_link"].get_position()
+        return self.parts["grasp_point"].get_position()
 
     def end_effector_part_index(self):
         """
         Get end-effector link id
         """
-        return self.parts["gripper_link"].body_part_index
+        return self.parts["grasp_point"].body_part_index
 
     def get_relative_eef_pose(self):
         """
