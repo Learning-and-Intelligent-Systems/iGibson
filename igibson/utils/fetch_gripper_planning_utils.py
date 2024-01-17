@@ -97,6 +97,10 @@ def plan_base_motion_fg(
     start_conf = [pos[0], pos[1], yaw]
     if collision_fn(start_conf):
         print("Warning: initial configuration is in collision")
+        print({
+            (body_id, obs): pairwise_collision(body_id, obs, max_distance=max_distance) for obs in obstacles for body_id in body_ids
+            })
+        # exit()
         return None
     if collision_fn(end_conf):
         print("Warning: end configuration is in collision")
@@ -158,8 +162,8 @@ def plan_gripper_motion_fg(
 
     def sample_fn():
         q = np.array(start_conf)
-        upper = np.array(joint_limits[1])
-        lower = np.array(joint_limits[0])
+        upper = np.array(joint_limits[1])[manipulation_mask]
+        lower = np.array(joint_limits[0])[manipulation_mask]
         q[manipulation_mask] = rng.random(size=manipulation_mask.sum()) * (upper - lower) + lower
         return tuple(q)
 
@@ -228,6 +232,12 @@ def plan_gripper_motion_fg(
         return None
     if collision_fn(end_conf):
         print("Warning: end configuration is in collision")
+        for obs in obstacles:
+            if pairwise_collision((robot.body_id, (robot.parts["gripper_link"].body_part_index,
+                                robot.parts["l_gripper_finger_link"].body_part_index,
+                                robot.parts["r_gripper_finger_link"].body_part_index)),
+                obs, max_distance=max_distance):
+                print('\tcollision w/ obs:', obs)
         return None
     if direct:
         return direct_path(start_conf, end_conf, extend_fn, collision_fn)
